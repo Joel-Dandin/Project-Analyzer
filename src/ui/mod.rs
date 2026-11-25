@@ -1,4 +1,5 @@
 mod catalog;
+mod stats;
 mod view;
 
 use std::{collections::BTreeSet, path::PathBuf, sync::Arc, time::Duration};
@@ -47,6 +48,7 @@ pub struct Dashboard {
     active: Option<ActiveScan>,
     scan_error: Option<String>,
     info: Option<String>,
+    show_statistics: bool,
     query: String,
     search: Entity<InputState>,
     description: Entity<InputState>,
@@ -143,6 +145,7 @@ impl Dashboard {
             active: None,
             scan_error: None,
             info: None,
+            show_statistics: false,
             query: String::new(),
             search,
             description,
@@ -315,7 +318,7 @@ impl Dashboard {
 
     fn select(&mut self, index: usize, cx: &mut Context<Self>) {
         if self.draft.is_none()
-            && self.selected != Some(index)
+            && (self.selected != Some(index) || self.show_statistics)
             && self
                 .catalog
                 .as_ref()
@@ -323,6 +326,7 @@ impl Dashboard {
                 .is_some()
         {
             self.selected = Some(index);
+            self.show_statistics = false;
             self.reset_details();
             cx.notify();
         }

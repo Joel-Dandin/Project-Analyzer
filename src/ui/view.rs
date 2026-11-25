@@ -1,3 +1,5 @@
+mod statistics;
+
 use gpui::{prelude::FluentBuilder as _, *};
 use gpui_component::{
     Disableable, Sizable,
@@ -42,7 +44,8 @@ impl Render for Dashboard {
                     .px_5()
                     .py_4()
                     .child(self.inventory(cx))
-                    .child(self.details(cx)),
+                    .when(self.show_statistics, |view| view.child(self.statistics()))
+                    .when(!self.show_statistics, |view| view.child(self.details(cx))),
             )
             .child(self.footer(cx))
     }
@@ -93,6 +96,20 @@ impl Dashboard {
                             .truncate()
                             .child("WORKSPACE INVENTORY"),
                     ),
+            )
+            .child(
+                Button::new("toggle-statistics")
+                    .outline()
+                    .label(if self.show_statistics {
+                        "Project details"
+                    } else {
+                        "Statistics"
+                    })
+                    .disabled(self.draft.is_some())
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.show_statistics = !this.show_statistics;
+                        cx.notify();
+                    })),
             )
             .child(
                 Button::new("choose-workspace")
@@ -149,9 +166,9 @@ impl Dashboard {
             .as_ref()
             .map(|catalog| {
                 (
-                    format!("{}", catalog.report.projects.len()),
-                    format!("{}", catalog.full_stack),
-                    format!("{}", catalog.with_remotes),
+                    catalog.stats.projects.to_string(),
+                    catalog.stats.full_stack().to_string(),
+                    catalog.stats.with_remotes.to_string(),
                 )
             })
             .unwrap_or_else(|| ("—".into(), "—".into(), "—".into()));

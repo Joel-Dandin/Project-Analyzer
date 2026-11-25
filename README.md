@@ -24,6 +24,10 @@ cargo build --release --locked
 3. Under **Notes & status**, choose **Edit**, enter a description, select one or more status tags, and click **Save**. Available tags: Planned, In progress, Developing, On hold, Completed, Archived, and Cancelled.
 4. Use **Refresh** to rescan or **Cancel scan** to stop. The app shows skeletons while loading its first result and keeps the existing inventory available during refresh. On reopening, it restores the last workspace and cached results while rescanning in the background.
 
+## Workspace statistics
+
+Click **Statistics** to see project counts by type, the six most common technologies, local Git and remote coverage, and the last successful scan's duration and folder counts. These figures cover the whole workspace, independent of search. A technology counts once per project, so a project can contribute to several technology bars. Choose **Project details** or select a project to return to the details pane.
+
 ## What is detected?
 
 The scanner recognizes project manifests, framework configuration, and selected source entry points. It supports, among others, React/Vue/Angular, Node back ends, Python/Flask/Django/FastAPI, Rust/Tauri, Spring Boot, and .NET. Grouping uses Git boundaries, workspace declarations, or conventional sibling directories. For example, a React `frontend` next to a Spring Boot `backend` can appear as **Full stack** with both stack labels and both component paths. Classification is heuristic; see [.ai/DETECTION.md](.ai/DETECTION.md) for rule coverage.

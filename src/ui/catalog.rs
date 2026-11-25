@@ -5,23 +5,22 @@ use project_analyser::{
     storage::Library,
 };
 
+use super::stats::ReportStats;
+
 /// Immutable search data is prepared with the report, off the UI thread.
 pub(super) struct Catalog {
     pub report: Arc<ScanReport>,
     index: Vec<String>,
-    pub full_stack: usize,
-    pub with_remotes: usize,
+    pub stats: ReportStats,
 }
 
 impl Catalog {
     pub fn new(report: Arc<ScanReport>) -> Self {
-        let mut full_stack = 0;
-        let mut with_remotes = 0;
+        let stats = ReportStats::from_report(&report);
         let index = report
             .projects
             .iter()
             .map(|project| {
-                full_stack += usize::from(project.kind() == "Full stack");
                 let mut text = format!(
                     "{} {} {}",
                     project.name(),
@@ -33,7 +32,6 @@ impl Catalog {
                     text.push_str(item);
                 }
                 if let Some(repository) = &project.repository {
-                    with_remotes += usize::from(!repository.remotes.is_empty());
                     for remote in &repository.remotes {
                         text.push(' ');
                         text.push_str(&remote.location.slug());
@@ -53,8 +51,7 @@ impl Catalog {
         Self {
             report,
             index,
-            full_stack,
-            with_remotes,
+            stats,
         }
     }
 
@@ -148,8 +145,8 @@ mod tests {
         }));
         let mut library = Library::default();
         assert_eq!(catalog.filter("Spring react example.org", &library), [0]);
-        assert_eq!(catalog.full_stack, 1);
-        assert_eq!(catalog.with_remotes, 1);
+        assert_eq!(catalog.stats.full_stack(), 1);
+        assert_eq!(catalog.stats.with_remotes, 1);
         assert_eq!(catalog.position(&path), Some(0));
         assert!(catalog.filter("archived", &library).is_empty());
         library.set_annotation(
