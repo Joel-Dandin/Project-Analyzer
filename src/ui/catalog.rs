@@ -66,16 +66,20 @@ impl Catalog {
             .ok()
     }
 
-    pub fn filter(&self, query: &str, library: &Library) -> Vec<usize> {
+    pub fn filter(&self, query: &str, library: &Library, favorites_only: bool) -> Vec<usize> {
         let query = query.to_lowercase();
         let words: Vec<_> = query.split_whitespace().collect();
-        if words.is_empty() {
+        if words.is_empty() && !favorites_only {
             return (0..self.index.len()).collect();
         }
         self.index
             .iter()
             .enumerate()
             .filter_map(|(i, text)| {
+                let path = &self.report.projects[i].path;
+                if favorites_only && !library.is_favorite(path) {
+                    return None;
+                }
                 let mut missing = words
                     .iter()
                     .filter(|word| !text.contains(**word))
@@ -83,7 +87,7 @@ impl Catalog {
                 if missing.peek().is_none() {
                     return Some(i);
                 }
-                let annotation = library.annotation(&self.report.projects[i].path)?;
+                let annotation = library.annotation(path)?;
                 let description = annotation.description.to_lowercase();
                 missing
                     .all(|word| {
@@ -136,19 +140,29 @@ mod tests {
                 }],
             }),
         };
+        let other = Project {
+            path: root.join("storefront"),
+            roles: BTreeSet::from([Role::Frontend]),
+            stack: BTreeSet::from(["React".to_owned()]),
+            components: Vec::new(),
+            repository: None,
+        };
         let catalog = Catalog::new(Arc::new(ScanReport {
             root,
-            projects: vec![project],
+            projects: vec![project, other],
             visited_directories: 1,
             skipped_entries: 0,
             elapsed_ms: 0,
         }));
         let mut library = Library::default();
-        assert_eq!(catalog.filter("Spring react example.org", &library), [0]);
+        assert_eq!(
+            catalog.filter("Spring react example.org", &library, false),
+            [0]
+        );
         assert_eq!(catalog.stats.full_stack(), 1);
         assert_eq!(catalog.stats.with_remotes, 1);
         assert_eq!(catalog.position(&path), Some(0));
-        assert!(catalog.filter("archived", &library).is_empty());
+        assert!(catalog.filter("archived", &library, false).is_empty());
         library.set_annotation(
             &path,
             Annotation {
@@ -156,7 +170,21 @@ mod tests {
                 tags: BTreeSet::from([Tag::Archived]),
             },
         );
-        assert_eq!(catalog.filter("ARCHIVED promotion React", &library), [0]);
-        assert!(catalog.filter("ARCHIVED missing", &library).is_empty());
+        assert_eq!(
+            catalog.filter("ARCHIVED promotion React", &library, false),
+            [0]
+        );
+        assert!(
+            catalog
+                .filter("ARCHIVED missing", &library, false)
+                .is_empty()
+        );
+        assert_eq!(catalog.filter("react", &library, false), [0, 1]);
+        assert!(catalog.filter("", &library, true).is_empty());
+        assert!(library.set_favorite(&path, true));
+        assert_eq!(catalog.filter("", &library, true), [0]);
+        assert_eq!(catalog.filter("React", &library, true), [0]);
+        assert_eq!(catalog.filter("archived", &library, true), [0]);
+        assert!(catalog.filter("storefront", &library, true).is_empty());
     }
 }

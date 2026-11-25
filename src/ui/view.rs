@@ -30,7 +30,7 @@ impl Render for Dashboard {
             .size_full()
             .bg(rgb(CANVAS))
             .text_color(rgb(INK))
-            .font_family("Segoe UI")
+            .font_family(".SystemUIFont")
             .text_size(px(14.))
             .child(self.header(cx))
             .child(self.workspace_strip(cx))
@@ -289,8 +289,37 @@ impl Dashboard {
                             .flex()
                             .items_center()
                             .justify_between()
-                            .child(div().font_weight(FontWeight::SEMIBOLD).child("Projects"))
-                            .child(div().text_xs().text_color(rgb(MUTED)).child(count)),
+                            .gap_2()
+                            .child(div().font_weight(FontWeight::SEMIBOLD).child(
+                                if self.favorites_only {
+                                    "Favorites"
+                                } else {
+                                    "Projects"
+                                },
+                            ))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(div().text_xs().text_color(rgb(MUTED)).child(count))
+                                    .child(
+                                        Button::new("favorites-filter")
+                                            .outline()
+                                            .small()
+                                            .label(if self.favorites_only {
+                                                "Show all"
+                                            } else {
+                                                "Favorites only"
+                                            })
+                                            .disabled(
+                                                self.catalog.is_none() || self.draft.is_some(),
+                                            )
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.toggle_favorites_filter(cx)
+                                            })),
+                                    ),
+                            ),
                     )
                     .child(
                         Input::new(&self.search)
@@ -306,6 +335,11 @@ impl Dashboard {
                     )
                 } else if self.catalog.is_none() {
                     ("No results yet", "Use Refresh to scan this folder.")
+                } else if self.favorites_only {
+                    (
+                        "No favorites to show",
+                        "Change the search or choose Show all to find projects to favorite.",
+                    )
                 } else if !self.query.trim().is_empty()
                     && self
                         .catalog
@@ -362,6 +396,7 @@ impl Dashboard {
             .library
             .annotation(&project.path)
             .and_then(|a| a.tags.first().copied());
+        let favorite = self.library.is_favorite(&project.path);
         let height = px(64.);
         div().h(height).w_full().px_2().py_1().child(
             div()
@@ -415,9 +450,25 @@ impl Dashboard {
                         .min_w_0()
                         .child(
                             div()
-                                .truncate()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(project.name().into_owned()),
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .when(favorite, |this| {
+                                    this.child(
+                                        div()
+                                            .flex_none()
+                                            .text_xs()
+                                            .text_color(rgb(AMBER))
+                                            .child("★"),
+                                    )
+                                })
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .truncate()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child(project.name().into_owned()),
+                                ),
                         )
                         .child(
                             div()
@@ -451,6 +502,7 @@ impl Dashboard {
         };
         let path = project.path.display().to_string();
         let copy_path = path.clone();
+        let favorite = self.library.is_favorite(&project.path);
         panel()
             .flex_1()
             .min_w_0()
@@ -501,10 +553,34 @@ impl Dashboard {
                     )
                     .child(
                         div()
-                            .text_xs()
-                            .text_color(rgb(MUTED))
-                            .truncate()
-                            .child(path),
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_xs()
+                                    .text_color(rgb(MUTED))
+                                    .truncate()
+                                    .child(path),
+                            )
+                            .child(
+                                Button::new("toggle-favorite")
+                                    .outline()
+                                    .small()
+                                    .label(if favorite {
+                                        "Remove favorite"
+                                    } else {
+                                        "Add favorite"
+                                    })
+                                    .disabled(
+                                        !self.allow_save || self.picking || self.draft.is_some(),
+                                    )
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.toggle_favorite(cx)),
+                                    ),
+                            ),
                     ),
             )
             .child(

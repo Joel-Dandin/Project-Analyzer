@@ -49,6 +49,7 @@ pub struct Dashboard {
     scan_error: Option<String>,
     info: Option<String>,
     show_statistics: bool,
+    favorites_only: bool,
     query: String,
     search: Entity<InputState>,
     description: Entity<InputState>,
@@ -146,6 +147,7 @@ impl Dashboard {
             scan_error: None,
             info: None,
             show_statistics: false,
+            favorites_only: false,
             query: String::new(),
             search,
             description,
@@ -300,7 +302,7 @@ impl Dashboard {
 
     fn rebuild_filter(&mut self, reset_scroll: bool) {
         self.visible = self.catalog.as_ref().map_or_else(Vec::new, |catalog| {
-            catalog.filter(&self.query, &self.library)
+            catalog.filter(&self.query, &self.library, self.favorites_only)
         });
         if self.draft.is_none()
             && !self
@@ -328,6 +330,31 @@ impl Dashboard {
             self.selected = Some(index);
             self.show_statistics = false;
             self.reset_details();
+            cx.notify();
+        }
+    }
+
+    fn toggle_favorites_filter(&mut self, cx: &mut Context<Self>) {
+        if self.draft.is_none() && self.catalog.is_some() {
+            self.favorites_only = !self.favorites_only;
+            self.rebuild_filter(true);
+            cx.notify();
+        }
+    }
+
+    fn toggle_favorite(&mut self, cx: &mut Context<Self>) {
+        if !self.allow_save || self.picking || self.draft.is_some() {
+            return;
+        }
+        let Some(path) = self.selected_project().map(|project| project.path.clone()) else {
+            return;
+        };
+        let favorite = !self.library.is_favorite(&path);
+        if self.library.set_favorite(&path, favorite) {
+            self.queue_save(cx);
+            if self.favorites_only {
+                self.rebuild_filter(true);
+            }
             cx.notify();
         }
     }
