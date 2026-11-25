@@ -1,0 +1,119 @@
+use std::{
+    borrow::Cow,
+    collections::BTreeSet,
+    path::{Path, PathBuf},
+};
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Role {
+    Frontend,
+    Backend,
+    Desktop,
+    Mobile,
+}
+
+impl Role {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Frontend => "Front end",
+            Self::Backend => "Back end",
+            Self::Desktop => "Desktop",
+            Self::Mobile => "Mobile",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct RemoteLocation {
+    pub host: String,
+    /// The hosting path (owner, organization, or nested group), not an authenticated user.
+    pub account: Option<String>,
+    pub repository: String,
+}
+
+impl RemoteLocation {
+    pub fn slug(&self) -> String {
+        match &self.account {
+            Some(account) => format!("{account}/{}", self.repository),
+            None => self.repository.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Remote {
+    pub name: String,
+    // Preserve the v1 flat host/account/repository representation in dashboard.json.
+    #[serde(flatten)]
+    pub location: RemoteLocation,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub push_targets: BTreeSet<RemoteLocation>,
+    pub has_tracking_refs: bool,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Repository {
+    pub remotes: Vec<Remote>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Component {
+    pub path: PathBuf,
+    pub roles: BTreeSet<Role>,
+    pub stack: BTreeSet<String>,
+    pub signals: BTreeSet<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Project {
+    pub path: PathBuf,
+    pub roles: BTreeSet<Role>,
+    pub stack: BTreeSet<String>,
+    pub components: Vec<Component>,
+    pub repository: Option<Repository>,
+}
+
+impl Project {
+    pub fn name(&self) -> Cow<'_, str> {
+        self.path
+            .file_name()
+            .unwrap_or(self.path.as_os_str())
+            .to_string_lossy()
+    }
+
+    pub fn kind(&self) -> &'static str {
+        if self.roles.contains(&Role::Frontend) && self.roles.contains(&Role::Backend) {
+            "Full stack"
+        } else if self.roles.contains(&Role::Desktop) {
+            "Desktop"
+        } else if self.roles.contains(&Role::Mobile) {
+            "Mobile"
+        } else if self.roles.contains(&Role::Backend) {
+            "Back end"
+        } else if self.roles.contains(&Role::Frontend) {
+            "Front end"
+        } else {
+            "General / tooling"
+        }
+    }
+
+    pub fn relative_path(&self, root: &Path) -> &Path {
+        match self.path.strip_prefix(root) {
+            Ok(path) if path.as_os_str().is_empty() => Path::new("."),
+            Ok(path) => path,
+            Err(_) => &self.path,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ScanReport {
+    pub root: PathBuf,
+    pub projects: Vec<Project>,
+    pub visited_directories: usize,
+    pub skipped_entries: usize,
+    pub elapsed_ms: u64,
+}
