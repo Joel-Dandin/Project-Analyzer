@@ -30,5 +30,9 @@ tempfile = "3"
 toml = "0.8"
 url = "2"
 
+[patch.crates-io]
+# GPUI's tar dependency still requires xattr 0.2.x. See the patch notes in vendor/.
+xattr = { path = "vendor/xattr-0.2.3" }
+
 [lints.rust]
 unsafe_code = "forbid"
