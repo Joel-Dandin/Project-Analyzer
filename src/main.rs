@@ -9,7 +9,7 @@ use gpui_component::{Root, Theme, ThemeMode};
 use ui::Dashboard;
 
 fn main() {
-    // Measure time to the first completed frame, excluding compilation.
+    // Measure time to GPUI's first frame callback, excluding compilation.
     let started = std::time::Instant::now();
     Application::new().run(move |cx| {
         gpui_component::init(cx);

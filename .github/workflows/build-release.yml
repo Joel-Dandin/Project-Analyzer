@@ -1,0 +1,161 @@
+name: Build and release
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+
+jobs:
+  windows:
+    name: Windows (x86-64 MSVC)
+    runs-on: windows-2025
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Set up Rust and locate the Windows SDK shader compiler
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $sdk = "${env:ProgramFiles(x86)}\Windows Kits\10\bin"
+          $fxc = Get-ChildItem "$sdk\*\x64\fxc.exe" -File |
+              Sort-Object { [Version]$_.Directory.Parent.Name } -Descending |
+              Select-Object -First 1
+          if (!$fxc) { throw 'The Windows SDK x64 fxc.exe is missing.' }
+          "RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-msvc" >> $env:GITHUB_ENV
+          "GPUI_FXC_PATH=$($fxc.FullName)" >> $env:GITHUB_ENV
+      - name: Format, test, lint, and build
+        run: ./scripts/validate-windows.ps1
+      - name: Archive Windows binary
+        run: |
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          Compress-Archive -Path target/release/project-analyser.exe -DestinationPath dist/project-analyser-windows-x86_64.zip
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-windows-x86_64
+          path: dist/project-analyser-windows-x86_64.zip
+          if-no-files-found: error
+          compression-level: 0
+
+  arch:
+    name: Arch Linux (x86-64)
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install Rust and native GPUI dependencies
+        run: |
+          pacman -Syu --noconfirm --needed \
+            git rust clang openssl fontconfig libx11 libxcb libxkbcommon libxkbcommon-x11 \
+            wayland vulkan-icd-loader
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Test and build
+        run: |
+          cargo test --locked
+          cargo build --locked --release
+      - name: Archive Arch Linux binary and xattr license notices
+        run: |
+          mkdir -p dist/staging/licenses/xattr
+          install -m 755 target/release/project-analyser dist/staging/project-analyser
+          install -m 644 vendor/xattr-0.2.3/LICENSE-{APACHE,MIT} dist/staging/licenses/xattr/
+          tar -czf dist/project-analyser-linux-arch-x86_64.tar.gz -C dist/staging project-analyser licenses
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-linux-arch-x86_64
+          path: dist/project-analyser-linux-arch-x86_64.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+
+  macos:
+    name: macOS (Apple silicon)
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Check the Xcode Metal compiler
+        shell: bash
+        run: |
+          if ! xcrun --sdk macosx metal --version; then
+            xcodebuild -downloadComponent MetalToolchain
+            xcrun --sdk macosx metal --version
+          fi
+      - name: Compile and test with stable Rust
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add --toolchain stable aarch64-apple-darwin
+          cargo +stable test --locked --target aarch64-apple-darwin
+          cargo +stable build --locked --release --target aarch64-apple-darwin
+      - name: Archive macOS binary and xattr license notices
+        shell: bash
+        run: |
+          mkdir -p dist/staging/licenses/xattr
+          install -m 755 target/aarch64-apple-darwin/release/project-analyser dist/staging/project-analyser
+          install -m 644 vendor/xattr-0.2.3/LICENSE-{APACHE,MIT} dist/staging/licenses/xattr/
+          tar -czf dist/project-analyser-macos-arm64.tar.gz -C dist/staging project-analyser licenses
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-macos-arm64
+          path: dist/project-analyser-macos-arm64.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+
+  release:
+    name: Publish tagged release
+    needs: [windows, arch, macos]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    concurrency:
+      group: release-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: Checksum archives and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          cd dist
+          assets=(
+            project-analyser-windows-x86_64.zip
+            project-analyser-linux-arch-x86_64.tar.gz
+            project-analyser-macos-arm64.tar.gz
+          )
+          sha256sum "${assets[@]}" > SHA256SUMS
+          case "$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft' || true)" in
+            false) echo "Release $RELEASE_TAG is already published."; exit 0 ;;
+            true)  echo "Resuming draft release $RELEASE_TAG." ;;
+            *)     gh release create "$RELEASE_TAG" --verify-tag --draft --generate-notes ;;
+          esac
+          gh release upload "$RELEASE_TAG" "${assets[@]}" SHA256SUMS --clobber
+          gh release edit "$RELEASE_TAG" --draft=false
