@@ -55,7 +55,10 @@ The workflow builds an Apple silicon command-line archive from which you can lau
 ## Use the dashboard
 
 1. Click **Choose folder** and select a workspace or a parent directory. The selected path stays at the top; use **Copy root** if the path is truncated.
-2. Search by project name, path, stack, Git repository, description, status, or version. Use **Type** to show non-mobile Gradle projects, all mobile projects, Android, or iOS. An **Android & iOS** project appears in both platform filters. Select a result to see its classification, Git information, and contributing folders.
+2. Search by project name, path, stack, Git repository, description, status, or version. Use **Type** to narrow the inventory, then select a result to see its classification, Git information, and contributing folders.
+   - **Project types:** Front end, Back end, Full stack, Desktop, and General / tooling match the primary type shown on the project card.
+   - **Mobile platforms:** **Android (any)** and **iOS (any)** include dual-platform projects. Choose **Android only**, **iOS only**, or **Android & iOS** for an exact platform match. **Other mobile** shows apps with neither platform detected.
+   - **Non-mobile Gradle builds:** Show all non-mobile Gradle projects or narrow to **Groovy DSL** or **Kotlin DSL**. Projects using both appear in both DSL filters.
 3. Under **Notes, version & status**, choose **Edit** to update the description, enter a version tag (for example `1.2.0-rc.1`), or select status tags. Clear the version field to remove the tag. **Save** records status changes in **Status history**, newest first, with the previous and new tags and a UTC timestamp. Cancelling an edit or saving without changing the status tags does not add an entry. Existing tags are preserved when upgrading; history starts with the next status change.
 4. Under **Project to-dos**, choose **New to-do**, enter a task, and click **Add** or press Enter. Use the checkbox to complete or reopen a task and **Remove** to delete it. Changes save as you make them.
 5. Use **Add favorite** in the details pane to star a project. **Favorites only** combines with search and the type filter. Favorites persist across launches.

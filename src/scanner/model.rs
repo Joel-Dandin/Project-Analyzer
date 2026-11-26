@@ -81,6 +81,38 @@ pub struct Project {
     pub repository: Option<Repository>,
 }
 
+/// The primary type shown on a project card and counted in workspace statistics.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProjectKind {
+    Frontend,
+    Backend,
+    FullStack,
+    Desktop,
+    Android,
+    Ios,
+    AndroidAndIos,
+    Mobile,
+    Gradle,
+    Tooling,
+}
+
+impl ProjectKind {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Frontend => "Front end",
+            Self::Backend => "Back end",
+            Self::FullStack => "Full stack",
+            Self::Desktop => "Desktop",
+            Self::Android => ANDROID,
+            Self::Ios => IOS,
+            Self::AndroidAndIos => "Android & iOS",
+            Self::Mobile => "Mobile",
+            Self::Gradle => GRADLE,
+            Self::Tooling => "General / tooling",
+        }
+    }
+}
+
 impl Project {
     pub fn name(&self) -> Cow<'_, str> {
         self.path
@@ -90,7 +122,15 @@ impl Project {
     }
 
     pub fn is_gradle(&self) -> bool {
-        self.stack.contains(GRADLE) || self.stack.contains(GRADLE_KOTLIN)
+        self.is_gradle_groovy() || self.is_gradle_kotlin()
+    }
+
+    pub fn is_gradle_groovy(&self) -> bool {
+        self.stack.contains(GRADLE)
+    }
+
+    pub fn is_gradle_kotlin(&self) -> bool {
+        self.stack.contains(GRADLE_KOTLIN)
     }
 
     pub fn is_mobile(&self) -> bool {
@@ -105,28 +145,32 @@ impl Project {
         self.stack.contains(IOS)
     }
 
-    pub fn kind(&self) -> &'static str {
+    pub fn classification(&self) -> ProjectKind {
         match (self.is_android(), self.is_ios()) {
-            (true, true) => return "Android & iOS",
-            (true, false) => return ANDROID,
-            (false, true) => return IOS,
+            (true, true) => return ProjectKind::AndroidAndIos,
+            (true, false) => return ProjectKind::Android,
+            (false, true) => return ProjectKind::Ios,
             (false, false) => {}
         }
         if self.is_mobile() {
-            "Mobile"
+            ProjectKind::Mobile
         } else if self.roles.contains(&Role::Frontend) && self.roles.contains(&Role::Backend) {
-            "Full stack"
+            ProjectKind::FullStack
         } else if self.roles.contains(&Role::Desktop) {
-            "Desktop"
+            ProjectKind::Desktop
         } else if self.roles.contains(&Role::Backend) {
-            "Back end"
+            ProjectKind::Backend
         } else if self.roles.contains(&Role::Frontend) {
-            "Front end"
+            ProjectKind::Frontend
         } else if self.is_gradle() {
-            GRADLE
+            ProjectKind::Gradle
         } else {
-            "General / tooling"
+            ProjectKind::Tooling
         }
+    }
+
+    pub fn kind(&self) -> &'static str {
+        self.classification().label()
     }
 
     pub fn relative_path(&self, root: &Path) -> &Path {

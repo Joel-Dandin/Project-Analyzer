@@ -16,7 +16,7 @@ use gpui::{
 use gpui_component::{
     IndexPath,
     input::{InputEvent, InputState},
-    select::{SelectEvent, SelectItem, SelectState},
+    select::{SearchableVec, SelectEvent, SelectGroup, SelectItem, SelectState},
 };
 use project_analyser::{
     scanner::{Phase, Project, ScanControl, scan},
@@ -24,6 +24,8 @@ use project_analyser::{
 };
 
 use catalog::{Catalog, ProjectFilter};
+
+type TypeOptions = SearchableVec<SelectGroup<ProjectFilter>>;
 
 impl SelectItem for ProjectFilter {
     type Value = Self;
@@ -79,7 +81,7 @@ pub struct Dashboard {
     show_statistics: bool,
     favorites_only: bool,
     project_filter: ProjectFilter,
-    type_select: Entity<SelectState<Vec<ProjectFilter>>>,
+    type_select: Entity<SelectState<TypeOptions>>,
     query: String,
     search: Entity<InputState>,
     description: Entity<InputState>,
@@ -113,8 +115,12 @@ impl Dashboard {
                 .validate(|text, _| text.chars().count() <= VERSION_LIMIT)
         });
         let type_select = cx.new(|cx| {
+            let groups = ProjectFilter::GROUPS
+                .into_iter()
+                .map(|(title, filters)| SelectGroup::new(title).items(filters.iter().copied()))
+                .collect::<Vec<_>>();
             SelectState::new(
-                ProjectFilter::ALL.to_vec(),
+                TypeOptions::new(groups),
                 Some(IndexPath::new(0)),
                 window,
                 cx,

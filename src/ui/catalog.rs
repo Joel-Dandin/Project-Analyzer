@@ -1,7 +1,7 @@
 use std::{path::Path, sync::Arc};
 
 use project_analyser::{
-    scanner::{Project, ScanReport},
+    scanner::{Project, ProjectKind, ScanReport},
     storage::Library,
 };
 
@@ -11,38 +11,72 @@ use super::stats::ReportStats;
 pub(super) enum ProjectFilter {
     #[default]
     All,
+    Kind(ProjectKind),
+    AnyMobile,
+    AnyAndroid,
+    AnyIos,
     Gradle,
-    Mobile,
-    Android,
-    Ios,
+    GradleGroovy,
+    GradleKotlin,
 }
 
 impl ProjectFilter {
-    pub const ALL: [Self; 5] = [
-        Self::All,
-        Self::Gradle,
-        Self::Mobile,
-        Self::Android,
-        Self::Ios,
+    pub const GROUPS: [(&'static str, &'static [Self]); 3] = [
+        (
+            "Project types",
+            &[
+                Self::All,
+                Self::Kind(ProjectKind::Frontend),
+                Self::Kind(ProjectKind::Backend),
+                Self::Kind(ProjectKind::FullStack),
+                Self::Kind(ProjectKind::Desktop),
+                Self::Kind(ProjectKind::Tooling),
+            ],
+        ),
+        (
+            "Mobile platforms",
+            &[
+                Self::AnyMobile,
+                Self::AnyAndroid,
+                Self::Kind(ProjectKind::Android),
+                Self::AnyIos,
+                Self::Kind(ProjectKind::Ios),
+                Self::Kind(ProjectKind::AndroidAndIos),
+                Self::Kind(ProjectKind::Mobile),
+            ],
+        ),
+        (
+            "Non-mobile Gradle builds",
+            &[Self::Gradle, Self::GradleGroovy, Self::GradleKotlin],
+        ),
     ];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::All => "All project types",
+            Self::Kind(ProjectKind::Android) => "Android only",
+            Self::Kind(ProjectKind::Ios) => "iOS only",
+            Self::Kind(ProjectKind::Mobile) => "Other mobile",
+            Self::Kind(kind) => kind.label(),
+            Self::AnyMobile => "Mobile (all platforms)",
+            Self::AnyAndroid => "Android (any)",
+            Self::AnyIos => "iOS (any)",
             Self::Gradle => "Gradle (non-mobile)",
-            Self::Mobile => "Mobile (all platforms)",
-            Self::Android => "Android",
-            Self::Ios => "iOS",
+            Self::GradleGroovy => "Gradle (Groovy DSL)",
+            Self::GradleKotlin => "Gradle (Kotlin DSL)",
         }
     }
 
     fn matches(self, project: &Project) -> bool {
         match self {
             Self::All => true,
-            Self::Gradle => project.is_gradle() && !project.is_mobile(),
-            Self::Mobile => project.is_mobile(),
-            Self::Android => project.is_android(),
-            Self::Ios => project.is_ios(),
+            Self::Kind(kind) => project.classification() == kind,
+            Self::AnyMobile => project.is_mobile(),
+            Self::AnyAndroid => project.is_android(),
+            Self::AnyIos => project.is_ios(),
+            Self::Gradle => !project.is_mobile() && project.is_gradle(),
+            Self::GradleGroovy => !project.is_mobile() && project.is_gradle_groovy(),
+            Self::GradleKotlin => !project.is_mobile() && project.is_gradle_kotlin(),
         }
     }
 }
@@ -269,56 +303,132 @@ mod tests {
         );
     }
 
-    #[test]
-    fn filters_gradle_and_mobile_platforms_independently_of_search_and_favorites() {
-        let project = |name: &str, stacks: &[&str], roles: &[Role]| Project {
+    fn project(name: &str, roles: &[Role], stack: &[&str]) -> Project {
+        Project {
             path: Path::new("workspace").join(name),
             roles: roles.iter().copied().collect(),
-            stack: stacks.iter().map(|item| (*item).to_owned()).collect(),
+            stack: stack.iter().map(|item| (*item).to_owned()).collect(),
             components: Vec::new(),
             repository: None,
-        };
-        let catalog = Catalog::new(Arc::new(ScanReport {
+        }
+    }
+
+    fn catalog_with(projects: Vec<Project>) -> Catalog {
+        Catalog::new(Arc::new(ScanReport {
             root: "workspace".into(),
-            projects: vec![
-                project("api", &["Gradle", "Spring Boot"], &[Role::Backend]),
-                project(
-                    "droid",
-                    &["Gradle (Kotlin DSL)", "Android"],
-                    &[Role::Mobile],
-                ),
-                project("flutter", &["Flutter"], &[Role::Mobile]),
-                project("phone", &["iOS"], &[Role::Mobile]),
-                project("shared", &["Android", "iOS", "Flutter"], &[Role::Mobile]),
-            ],
+            projects,
             visited_directories: 0,
             skipped_entries: 0,
             elapsed_ms: 0,
-        }));
+        }))
+    }
+
+    fn assert_type_matches(catalog: &Catalog, cases: &[(ProjectFilter, &[usize])]) {
+        let library = Library::default();
+        for &(filter, expected) in cases {
+            assert_eq!(
+                catalog.filter("", &library, false, filter).as_slice(),
+                expected,
+                "{filter:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn filters_by_primary_project_type() {
+        use ProjectFilter::Kind;
+        use ProjectKind::{Backend, Desktop, Frontend, FullStack, Tooling};
+
+        let catalog = catalog_with(vec![
+            project("api", &[Role::Backend], &["FastAPI"]),
+            project("desktop", &[Role::Frontend, Role::Desktop], &["Tauri"]),
+            project("shop", &[Role::Frontend, Role::Backend], &["React", "Axum"]),
+            project("site", &[Role::Frontend], &["React"]),
+            project("tools", &[], &["Rust"]),
+        ]);
+        assert_type_matches(
+            &catalog,
+            &[
+                (ProjectFilter::All, &[0, 1, 2, 3, 4]),
+                (Kind(Backend), &[0]),
+                (Kind(Desktop), &[1]),
+                (Kind(FullStack), &[2]),
+                (Kind(Frontend), &[3]),
+                (Kind(Tooling), &[4]),
+            ],
+        );
+    }
+
+    #[test]
+    fn filters_mobile_by_detected_platforms_and_combines_with_search_and_favorites() {
+        use ProjectFilter::{AnyAndroid, AnyIos, AnyMobile, Kind};
+        use ProjectKind::{Android, AndroidAndIos, Ios, Mobile};
+
+        let catalog = catalog_with(vec![
+            project(
+                "droid",
+                &[Role::Mobile],
+                &["Android", "Gradle (Kotlin DSL)"],
+            ),
+            project("flutter", &[Role::Mobile], &["Flutter"]),
+            project("phone", &[Role::Mobile], &["iOS"]),
+            project("shared", &[Role::Mobile], &["Android", "iOS", "Flutter"]),
+        ]);
+        assert_type_matches(
+            &catalog,
+            &[
+                (AnyMobile, &[0, 1, 2, 3]),
+                (AnyAndroid, &[0, 3]),
+                (AnyIos, &[2, 3]),
+                (Kind(Android), &[0]),
+                (Kind(Ios), &[2]),
+                (Kind(AndroidAndIos), &[3]),
+                (Kind(Mobile), &[1]),
+            ],
+        );
         let mut library = Library::default();
-        assert!(library.set_favorite(&catalog.report.projects[4].path, true));
+        assert!(library.set_favorite(&catalog.report.projects[3].path, true));
         assert_eq!(
-            catalog.filter("", &library, false, ProjectFilter::Gradle),
-            [0]
+            catalog.filter("FLUTTER", &library, true, Kind(AndroidAndIos)),
+            [3]
         );
-        assert_eq!(
-            catalog.filter("", &library, false, ProjectFilter::Mobile),
-            [1, 2, 3, 4]
+        assert!(
+            catalog
+                .filter("FLUTTER", &library, true, Kind(Mobile))
+                .is_empty()
         );
-        assert_eq!(
-            catalog.filter("", &library, false, ProjectFilter::Android),
-            [1, 4]
-        );
-        assert_eq!(
-            catalog.filter("", &library, false, ProjectFilter::Ios),
-            [3, 4]
-        );
-        assert_eq!(
-            catalog.filter("flutter", &library, true, ProjectFilter::Mobile),
-            [4]
+        assert!(
+            catalog
+                .filter("native", &library, true, Kind(AndroidAndIos))
+                .is_empty()
         );
         assert_eq!(catalog.stats.kinds["Android"], 1);
         assert_eq!(catalog.stats.kinds["Android & iOS"], 1);
         assert_eq!(catalog.stats.kinds["iOS"], 1);
+    }
+
+    #[test]
+    fn filters_non_mobile_gradle_by_dsl_even_when_it_has_another_primary_type() {
+        use ProjectFilter::{Gradle, GradleGroovy, GradleKotlin};
+
+        let catalog = catalog_with(vec![
+            project("backend", &[Role::Backend], &["Gradle", "Spring Boot"]),
+            project("kotlin", &[], &["Gradle (Kotlin DSL)"]),
+            project("mixed", &[], &["Gradle", "Gradle (Kotlin DSL)"]),
+            project(
+                "mobile",
+                &[Role::Mobile],
+                &["Android", "Gradle", "Gradle (Kotlin DSL)"],
+            ),
+            project("tools", &[], &["Rust"]),
+        ]);
+        assert_type_matches(
+            &catalog,
+            &[
+                (Gradle, &[0, 1, 2]),
+                (GradleGroovy, &[0, 2]),
+                (GradleKotlin, &[1, 2]),
+            ],
+        );
     }
 }

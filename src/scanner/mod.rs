@@ -25,7 +25,9 @@ use self::{
     files::is_link,
     rules::{Candidate, Evidence, Rule},
 };
-pub use model::{Component, Project, Remote, RemoteLocation, Repository, Role, ScanReport};
+pub use model::{
+    Component, Project, ProjectKind, Remote, RemoteLocation, Repository, Role, ScanReport,
+};
 
 #[derive(Default)]
 pub struct ScanControl {
