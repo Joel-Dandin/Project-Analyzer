@@ -1,15 +1,16 @@
 "use strict";
 
 const palette = ["#5E6AD2", "#B0B3BA", "#80838A", "#5A5D63", "#3A3C41"];
+const languageNames = new Set(["C#", "Dart", "Go", "Groovy", "Java", "JavaScript", "Kotlin", "Python", "Rust", "Swift", "TypeScript"]);
+const activeStatuses = ["in_progress", "developing"];
 
 function summarizeWorkspace({projects, folders, history, last_report}) {
   const counts = {
     project_types: new Map(), languages: new Map(), frameworks: new Map(),
     statuses: new Map(), git_hosts: new Map(), owners: new Map(), tags: new Map(), versions: new Map(),
   };
-  const languageNames = new Set(["C#", "Dart", "Go", "Groovy", "Java", "JavaScript", "Kotlin", "Python", "Rust", "Swift", "TypeScript"]);
   const increment = (map, key) => map.set(key, (map.get(key) ?? 0) + 1);
-  let starred = 0, git = 0, remotes = 0, total = 0, done = 0, mostOpen = null;
+  let starred = 0, active = 0, labelled = 0, git = 0, remotes = 0, total = 0, done = 0, mostOpen = null;
   const changes = [];
   for (const project of projects) {
     increment(counts.project_types, projectTypes[project.kind]);
@@ -18,6 +19,8 @@ function summarizeWorkspace({projects, folders, history, last_report}) {
     for (const tag of new Set(project.tags)) increment(counts.tags, tag);
     for (const version of new Set(project.versions)) increment(counts.versions, version);
     starred += Number(project.starred);
+    active += Number(project.statuses.some(value => activeStatuses.includes(value)));
+    labelled += Number(project.versions.length > 0);
     git += Number(Boolean(project.repository));
     const remote = primaryRemote(project);
     remotes += Number(Boolean(remote));
@@ -37,7 +40,9 @@ function summarizeWorkspace({projects, folders, history, last_report}) {
     Array.from(map, ([label, count]) => ({label, count})).sort((a, b) => b.count - a.count || technologyOrder.compare(a.label, b.label)),
   ]));
   return {
-    projects: projects.length, folders: folders.length, starred, git_projects: git, with_remotes: remotes,
+    projects: projects.length, folders: folders.length, starred, active, labelled,
+    git_projects: git, with_remotes: remotes,
+    since_last_scan: history.length > 1 ? history.at(-1).projects - history.at(-2).projects : null,
     todo: {total, done, open: total - done, most_open: mostOpen},
     ...ranked, last_report, scan_history: history, status_changes: changes,
   };
@@ -92,22 +97,32 @@ function scanActivity(history, report) {
     }).join("")}</svg>` : "";
   const last = scans.at(-1);
   const facts = last ? `Last scan ${timeAgo(last.at)} · ${secondsText(last.elapsed_ms)} · ${last.folders} ${last.folders === 1 ? "folder" : "folders"}` : `Last scan · ${secondsText(report.elapsed_ms)}`;
-  return `${chart}<div class="t3" title="${text(last?.at)}">${text(facts)}</div>${report ? `<div class="t3">${report.visited} directories visited · ${report.skipped} entries skipped</div>` : ""}`;
+  return `${chart}<div class="t3 scan-facts" title="${text(last?.at)}">${text(facts)}</div>${report ? `<div class="t3 scan-facts">${report.visited} directories visited · ${report.skipped} entries skipped</div>` : ""}`;
+}
+
+function sinceLastScan(delta, folders) {
+  if (delta == null) return `${folders} scan ${folders === 1 ? "folder" : "folders"}`;
+  return delta === 0 ? "No change since last scan" : `${delta > 0 ? "+" : "−"}${Math.abs(delta)} since last scan`;
 }
 
 function renderStatistics(stats) {
-  const {projects, folders, starred, git_projects, with_remotes, todo, project_types, languages, frameworks, statuses, git_hosts, owners, tags, versions, scan_history, last_report, status_changes} = stats;
+  const {projects, folders, starred, active, labelled, git_projects, with_remotes, since_last_scan, todo, project_types, languages, frameworks, statuses, git_hosts, owners, tags, versions, scan_history, last_report, status_changes} = stats;
   const pct = todo.total ? Math.round(todo.done * 100 / todo.total) : 0;
+  const share = count => `${projects ? Math.round(count * 100 / projects) : 0}% of all`;
   return `<div class="stats-grid overview-cards">
-    ${statNumber("Total projects", projects, `${folders} scan ${folders === 1 ? "folder" : "folders"}`)}
-    ${statNumber("Starred", starred, `${projects ? Math.round(starred * 100 / projects) : 0}% of projects`)}
-    ${statNumber("Git repositories", git_projects, `${with_remotes} with remotes`)}
+    ${statNumber("Total projects", projects, sinceLastScan(since_last_scan, folders))}
+    ${statNumber("Active", active, share(active))}
+    ${statNumber("Starred", starred, share(starred))}
+    ${statNumber("Git repositories", git_projects, `${git_projects - with_remotes} without remote`)}
+    ${statNumber("Version-labelled", labelled, share(labelled))}
     ${statNumber("Open to-dos", todo.open, `${todo.done} of ${todo.total} done`)}
   </div>
-  <div class="stats-grid">
+  <div class="stats-grid breakdown-cards">
     ${statsCard("Projects by type", statsBars(project_types, "No projects yet."))}
     ${statsCard("Top languages", statsBars(languages))}
     ${statsCard("Top frameworks", statsBars(frameworks))}
+  </div>
+  <div class="stats-grid">
     ${statsCard("Project status", statsDonut(statuses, projects))}
     ${statsCard("Git hosts", statsDonut(git_hosts, projects))}
     ${statsCard("Owners / organizations", statsBars(owners))}
@@ -116,14 +131,13 @@ function renderStatistics(stats) {
     ${statsCard("Scan activity", scanActivity(scan_history, last_report))}
     ${statsCard("Top tags", statsBars(tags, "No tags yet."))}
     ${statsCard("Version labels", versions.slice(0, 6).map(({label, count}, i) => `<div class="row version-entry">
-      <span class="ch ellipsis" title="${text(label)}">${text(label)}</span><span class="t3 spacer">${i === 0 && count > 1 ? "most used" : ""}</span>${count} ${count === 1 ? "project" : "projects"}
+      <span class="ch ellipsis" title="${text(label)}">${text(label)}</span><span class="t3 spacer">${i === 0 && count > 1 ? "most used" : /-[a-z]/i.test(label) ? "pre-release" : ""}</span>${count} ${count === 1 ? "project" : "projects"}
     </div>`).join("") || '<div class="t3">No version labels yet.</div>')}
   </div>
   <div class="stats-grid tracking-cards">
-    ${statsCard("To-do completion", `<div class="stat-number">${pct}% <span class="t3">tasks done</span></div>
+    ${statsCard("To-do completion", `<div class="stat-number">${pct}%<span class="t3"> tasks done</span></div>
       <div class="bar-track completion-bar" aria-hidden="true"><i class="highlight" style="width:${pct}%"></i></div>
-      <div class="t3">${todo.done} done · ${todo.open} open · ${todo.total} total</div>
-      ${todo.most_open ? `<div class="t3">Most open: ${text(todo.most_open.project)} (${todo.most_open.open})</div>` : ""}`)}
+      <div class="t3 completion-facts">${todo.done} done · ${todo.open} open · ${todo.total} total${todo.most_open ? `<br>Most open: ${text(todo.most_open.project)} (${todo.most_open.open})` : ""}</div>`)}
     ${statsCard("Recent status changes", status_changes.slice(0, 4).map(change => `<div class="row change-entry">
       <b class="ellipsis" title="${text(change.project)}">${text(change.project)}</b><span class="t2 spacer">${text(change.previous)} → ${text(change.current)}</span>
       <time class="t3 mono" datetime="${text(change.at)}" title="${text(change.at)} (UTC)">${text(formatUtc(change.at))}</time>

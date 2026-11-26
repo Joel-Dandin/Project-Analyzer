@@ -101,7 +101,7 @@ button:not(:disabled):hover:is(.nav, .btn:not(.pri), .ib) { background: var(--ho
 .overview-cards { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 .breakdown-cards { grid-template-columns: minmax(0, 1.1fr) repeat(2, minmax(0, 1fr)); }
 .scan-cards { grid-template-columns: minmax(0, 1.2fr) repeat(2, minmax(0, 1fr)); }
-.tracking-cards { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); }
+.tracking-cards { grid-template-columns: minmax(0, .8fr) minmax(0, 1.6fr); }
 .stats-title { color: var(--t3); font-size: 13px; font-weight: 500; letter-spacing: inherit; margin-bottom: 8px; }
 .overview-cards .stats-title { font-weight: 400; margin: 0 0 2px; }
 .overview-cards .stat-number + .t3 { font-size: 12px; }
