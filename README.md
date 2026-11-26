@@ -1,28 +1,18 @@
 # Project Analyser
 
-A read-only desktop dashboard for finding software projects in a folder. Built in Rust with [GPUI](https://gpui.rs/) and Longbridge's [GPUI Kit](https://github.com/longbridge/gpui-kit) (`gpui-component`).
+A read-only desktop dashboard for finding software projects in one or more folders. The Rust scanner and storage code drive a native window (`tao`) that hosts the dashboard in the operating system's WebView (`wry`). The interface is the Linear-style design from `temp/Design 3`, embedded in the binary: it needs no network access and no Node tooling.
 
 ## Build and run
 
-Use a current stable Rust toolchain and the checked-in `Cargo.lock`. The first build compiles GPUI and is separate from application startup.
+Use a current stable Rust toolchain (1.90 or newer) and the checked-in `Cargo.lock`.
 
 ### Windows (x86-64 MSVC)
 
-Install Visual Studio Build Tools with **Desktop development with C++** and a Windows SDK. Use PowerShell from the repository root (an x64 Developer shell if needed):
+Install Visual Studio Build Tools with **Desktop development with C++**. The WebView2 runtime ships with Windows 11 and current Windows 10 updates; install the Evergreen runtime from Microsoft if it is missing.
 
 ```powershell
 cargo run --locked
-```
-
-For an optimized build, GPUI also needs the SDK's `fxc.exe`. If it is not on `PATH`, point `GPUI_FXC_PATH` to the x64 compiler:
-
-```powershell
-$sdk = "${env:ProgramFiles(x86)}\Windows Kits\10\bin"
-$fxc = Get-ChildItem "$sdk\*\x64\fxc.exe" -File |
-    Sort-Object { [Version]$_.Directory.Parent.Name } -Descending |
-    Select-Object -First 1
-if (!$fxc) { throw 'Install a Windows SDK with the x64 fxc.exe compiler.' }
-$env:GPUI_FXC_PATH = $fxc.FullName
+# or an optimized build:
 cargo build --release --locked
 Start-Process .\target\release\project-analyser.exe
 ```
@@ -30,55 +20,44 @@ Start-Process .\target\release\project-analyser.exe
 ### Arch Linux (x86-64)
 
 ```bash
-sudo pacman -Syu --needed base-devel rust clang openssl pkgconf fontconfig \
-  libx11 libxcb libxkbcommon libxkbcommon-x11 wayland vulkan-icd-loader
+sudo pacman -Syu --needed base-devel rust pkgconf gtk3 webkit2gtk-4.1 xdg-desktop-portal
 cargo build --release --locked
 ./target/release/project-analyser
 ```
 
-If you already use `rustup`, use its stable toolchain instead of installing the `rust` package. Run the GUI under X11 or Wayland with a working Vulkan driver and installed fonts. The folder picker needs `xdg-desktop-portal` and a FileChooser-capable backend for your desktop. The release archive targets Arch Linux; it is not a portable binary for arbitrary Linux distributions.
+If you already use `rustup`, use its stable toolchain instead of the `rust` package. The folder picker needs a desktop portal backend for your desktop. The release archive targets Arch Linux; it is not a portable binary for arbitrary distributions.
 
 ### macOS
 
-Install Xcode and select its developer directory. Check for the Metal compiler; download the Metal Toolchain via Xcode if the check fails:
+Install the Xcode command line tools (`xcode-select --install`). WKWebView is part of the system.
 
 ```bash
-xcrun --sdk macosx metal --version
-# If the compiler is missing on a recent Xcode installation:
-# xcodebuild -downloadComponent MetalToolchain
 cargo build --release --locked
 ./target/release/project-analyser
 ```
 
-The workflow builds an Apple silicon command-line archive from which you can launch the GUI binary. It is not a signed, notarized, or bundled `.app`.
+The workflow builds an Apple silicon command-line archive. It is not a signed, notarized, or bundled `.app`.
 
 ## Use the dashboard
 
-1. Click **Choose folder** and select a workspace or a parent directory. The selected path stays at the top; use **Copy root** if the path is truncated.
-2. Search by project name, path, stack, Git repository, description, status, or version. Use **Type** to narrow the inventory, then select a result to see its classification, Git information, and contributing folders.
-   - **Project types:** Front end, Back end, Full stack, Desktop, and General / tooling match the primary type shown on the project card.
-   - **Mobile platforms:** **Android (any)** and **iOS (any)** include dual-platform projects. Choose **Android only**, **iOS only**, or **Android & iOS** for an exact platform match. **Other mobile** shows apps with neither platform detected.
-   - **Non-mobile Gradle builds:** Show all non-mobile Gradle projects or narrow to **Groovy DSL** or **Kotlin DSL**. Projects using both appear in both DSL filters.
-3. Under **Notes, version & status**, choose **Edit** to update the description, enter a version tag (for example `1.2.0-rc.1`), or select status tags. Clear the version field to remove the tag. **Save** records status changes in **Status history**, newest first, with the previous and new tags and a UTC timestamp. Cancelling an edit or saving without changing the status tags does not add an entry. Existing tags are preserved when upgrading; history starts with the next status change.
-4. Under **Project to-dos**, choose **New to-do**, enter a task, and click **Add** or press Enter. Use the checkbox to complete or reopen a task and **Remove** to delete it. Changes save as you make them.
-5. Use **Add favorite** in the details pane to star a project. **Favorites only** combines with search and the type filter. Favorites persist across launches.
-6. Use **Refresh** to rescan or **Cancel scan** to stop. The dashboard shows skeletons while loading its first result and keeps its last result visible during a same-workspace refresh.
+1. **Scan folders.** Click **+ Choose folder** (or **Start scan** on first launch) and select one or more folders. A folder inside an already selected folder is covered by its parent. Remove a folder with **×** while no scan is running.
+2. **Start scan / Rescan.** The header shows `Scanning · n of m folders`. Use **Cancel scan** to stop; a cancelled scan keeps the previous results. On launch the last saved results appear immediately ("Cached … · refreshing") while a fresh scan runs.
+3. **Browse.** The sidebar lists **All projects**, **Starred**, **Statistics**, and the project types: Frontend, Backend, Full-stack, Android only, iOS only, Android + iOS, Gradle (Groovy DSL), Gradle (Kotlin DSL). Desktop, other mobile, mixed-DSL Gradle, and general/tooling groups appear when present. Click a type again to clear it.
+4. **Filter.** **+ Filter** searches name, path, stack, Git host/owner/repository, summary, notes, tags, versions, and status, and offers **Android (any)**, **iOS (any)**, and **Gradle (any DSL)**. **☆ Starred** shows favorites only. **Search version label…** matches version labels. **Display** groups by type and toggles the details pane.
+5. **Project details.** Star a project, change its status (multiple statuses are allowed), read-only Git host / owner / repository, detected stack, tags, version labels, summary, notes, to-dos, and a timestamped status history (UTC). Edits save as you make them.
+6. **Statistics.** Totals, active, starred, Git coverage, version-labelled, open to-dos, projects by type, top languages and frameworks, status, Git hosts, owners, scan activity, tags, versions, to-do completion, and recent status changes. These figures cover the whole workspace regardless of filters. **Export** writes them as JSON.
 
-Click **Statistics** to see project counts by type, the six most common technologies, local Git and remote coverage, and the last successful scan's duration and folder counts. These figures cover the whole workspace, independent of search, type, and favorites filters. A technology counts once per project. Choose **Project details** or select a project to return to the details pane.
+Classification is heuristic. Gradle is a build tool, not a mobile indicator: Android detection uses an applied Android Gradle plugin or an `AndroidManifest.xml`; iOS detection uses iPhone/iPad build settings in an Xcode project. Flutter, React Native, and Expo projects may be listed as **Other mobile** until native platform evidence is found.
 
-## What is detected?
-
-The scanner recognizes project manifests, framework configuration, and selected source entry points. It supports, among others, React/Vue/Angular, Node back ends, Python/Flask/Django/FastAPI, Rust/Tauri, Spring Boot, and .NET. Grouping uses Git boundaries, workspace declarations, or conventional sibling directories. For example, a React `frontend` next to a Spring Boot `backend` can appear as **Full stack** with both stack labels and component paths. Classification is heuristic.
-
-Gradle is a build tool, not a mobile indicator. Android detection uses an applied Android Gradle plugin or an `AndroidManifest.xml`; iOS detection uses iPhone/iPad build settings in an Xcode project. A macOS-only Xcode project or Swift package is not sufficient evidence of an iOS app. Flutter, React Native, and Expo projects may be listed as **Mobile** until native platform evidence is found. Refresh a previously scanned workspace to apply the new classification.
-
-Git metadata comes from local configuration and refs. The dashboard shows the remote host, repository, and owner or organization, including a distinct push destination when present. **Tracking refs do not verify that your commits were pushed.** The app does not contact Git hosts.
+Git metadata comes from local configuration and refs only. **Tracking refs do not verify that your commits were pushed.** The app does not contact Git hosts.
 
 ## Local data and interruption recovery
 
-**The scanner does not modify, execute, or upload scanned projects.** Descriptions, status tags and their history, version tags, to-dos, favorites, the last folder, and the latest successful inventory are saved to the app's `dashboard.json`. On Windows, the usual path is `%LOCALAPPDATA%\Workspace Tools\Project Analyser\data\dashboard.json`; **Copy data file path** gives the exact path. Close the app before editing or backing up the JSON. Project metadata and favorites are keyed by project path, so moving or renaming projects does not carry them over automatically.
+**The scanner does not modify, execute, or upload scanned projects.** Summaries, notes, tags, version labels, status tags and history, to-dos, favorites, scan folders, scan history, and the latest inventory are saved to the app's `dashboard.json` (on Windows, usually `%LOCALAPPDATA%\Workspace Tools\Project Analyser\data\dashboard.json`). Earlier versions' data is read and upgraded in place. Project metadata is keyed by project path, so moving or renaming projects does not carry it over.
 
-If a terminal closure also stops a terminal-launched app, reopen the binary. The dashboard loads the last successfully saved workspace and matching snapshot and starts a fresh background scan. A forced stop during saving leaves the previous committed file intact. Unsaved edits and interrupted scans do not resume from their in-memory state. On Windows, launching the built binary from Explorer or with `Start-Process` avoids tying it to a foreground `cargo run`.
+Writes are atomic: a forced stop while saving leaves the previously committed file intact. If a terminal closure stops a terminal-launched app, reopen it: it loads the last saved state and starts a fresh scan. Unsaved in-memory state and interrupted scans do not resume. On Windows, launching the built binary from Explorer or with `Start-Process` avoids tying it to a foreground `cargo run`.
+
+The embedded page can only load its own assets, cannot open other URLs or windows, and runs without WebView storage (`incognito`). Only a typed set of commands reaches Rust.
 
 ## Development and releases
 
@@ -89,8 +68,10 @@ cargo test --locked --no-default-features
 cargo clippy --locked --all-targets -- -D warnings
 ```
 
-To measure the scanner alone on a local 500-project fixture, run `cargo test --locked --no-default-features measures_many_project_folders -- --ignored --nocapture`. To measure the time to GPUI's first frame callback, set `PROJECT_ANALYSER_LOG_STARTUP=1` in the environment and launch an already built binary; compilation is not included. Real scan time varies with the workspace and filesystem.
+To measure the scanner alone on a local 500-project fixture, run `cargo test --locked --no-default-features measures_many_project_folders -- --ignored --nocapture`. To log the time until the page asks for data, set `PROJECT_ANALYSER_LOG_STARTUP=1` and launch an already built binary.
 
-On Windows, run `./scripts/validate-windows.ps1 -Detach` to run the checks and release build independently of the terminal. Each run writes `pid.txt`, `stdout.log`, `stderr.log`, and a final `exit-code.txt` under `target/validation/windows-*`. Reopen the terminal and check the reported directory rather than starting a duplicate run. Exit code `0` means all checks passed. If the file is absent, check the PID and logs before starting another run.
+On Windows, run `./scripts/validate-windows.ps1 -Detach` to run the checks and release build independently of the terminal. Each run writes `pid.txt`, `stdout.log`, `stderr.log`, and a final `exit-code.txt` under `target/validation/windows-*`. Exit code `0` means all checks passed. If the file is absent, check the PID and logs before starting another run.
 
-[Build and release](.github/workflows/build-release.yml) runs on pull requests, pushes to `main` or `master`, and manual dispatch. It uploads Windows x86-64, Arch Linux x86-64, and macOS Apple silicon archives. When a `v*` tag is pushed to a GitHub repository with Actions enabled, the workflow waits for all three platform jobs, then publishes the three archives and `SHA256SUMS`. Re-running a failed publish can resume the draft without overwriting an already published release.
+[Build and release](.github/workflows/build-release.yml) runs on pull requests, pushes to `main` or `master`, and manual dispatch. It uploads Windows x86-64, Arch Linux x86-64, and macOS Apple silicon archives, each with the bundled font licenses. When a `v*` tag is pushed to a GitHub repository with Actions enabled, the workflow waits for all three platform jobs, then publishes the three archives and `SHA256SUMS`. Re-running a failed publish can resume the draft without overwriting an already published release.
+
+Embedded fonts: Inter and JetBrains Mono, both under the SIL Open Font License (`src/ui/web/*-OFL.txt`).
