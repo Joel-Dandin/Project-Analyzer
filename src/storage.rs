@@ -17,7 +17,7 @@ use tempfile::NamedTempFile;
 
 use crate::scanner::ScanReport;
 
-const SCHEMA_VERSION: u32 = 2;
+const SCHEMA_VERSION: u32 = 3;
 pub const VERSION_LIMIT: usize = 64;
 pub const TODO_LIMIT: usize = 240;
 
@@ -31,10 +31,11 @@ pub enum Tag {
     Completed,
     Archived,
     Cancelled,
+    InReview,
 }
 
 impl Tag {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Planned,
         Self::InProgress,
         Self::Developing,
@@ -42,6 +43,7 @@ impl Tag {
         Self::Completed,
         Self::Archived,
         Self::Cancelled,
+        Self::InReview,
     ];
 
     pub const fn label(self) -> &'static str {
@@ -53,6 +55,7 @@ impl Tag {
             Self::Completed => "Completed",
             Self::Archived => "Archived",
             Self::Cancelled => "Cancelled",
+            Self::InReview => "In review",
         }
     }
 }
@@ -64,6 +67,12 @@ pub struct Annotation {
     pub tags: BTreeSet<Tag>,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub version: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub notes: String,
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    pub custom_tags: BTreeSet<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    older_versions: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     status_history: Vec<StatusChange>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -71,6 +80,12 @@ pub struct Annotation {
 }
 
 impl Annotation {
+    pub fn versions(&self) -> impl Iterator<Item = &str> {
+        (!self.version.is_empty())
+            .then_some(self.version.as_str())
+            .into_iter()
+            .chain(self.older_versions.iter().map(String::as_str))
+    }
     /// In order of saving, from oldest to newest.
     pub fn status_history(&self) -> &[StatusChange] {
         &self.status_history
@@ -96,6 +111,14 @@ pub struct Todo {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ScanSummary {
+    pub at: DateTime<Utc>,
+    pub folders: Vec<PathBuf>,
+    pub projects: usize,
+    pub elapsed_ms: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Library {
     schema_version: u32,
     #[serde(default)]
@@ -106,6 +129,13 @@ pub struct Library {
     annotations: Arc<BTreeMap<String, Annotation>>,
     #[serde(default)]
     favorites: Arc<BTreeSet<String>>,
+    // None means the dashboard predates multiple scan folders.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    folders: Option<Vec<PathBuf>>,
+    #[serde(default)]
+    scan_history: Vec<ScanSummary>,
+    #[serde(default)]
+    pub scan_pending: bool,
 }
 
 impl Default for Library {
@@ -116,6 +146,9 @@ impl Default for Library {
             snapshot: None,
             annotations: Arc::new(BTreeMap::new()),
             favorites: Arc::new(BTreeSet::new()),
+            folders: None,
+            scan_history: Vec::new(),
+            scan_pending: false,
         }
     }
 }
@@ -160,6 +193,75 @@ impl Library {
             annotations.remove(&key);
         }
         true
+    }
+
+    pub fn set_notes(&mut self, project: &Path, notes: String) -> bool {
+        self.edit_annotation(project, |entry| {
+            if entry.notes == notes {
+                return false;
+            }
+            entry.notes = notes;
+            true
+        })
+    }
+
+    pub fn set_custom_tag(&mut self, project: &Path, tag: &str, present: bool) -> bool {
+        let tag: String = tag.trim().chars().take(64).collect();
+        if tag.is_empty() {
+            return false;
+        }
+        self.edit_annotation(project, |entry| {
+            if present {
+                entry.custom_tags.insert(tag)
+            } else {
+                entry.custom_tags.remove(&tag)
+            }
+        })
+    }
+
+    pub fn set_version_label(&mut self, project: &Path, version: &str, present: bool) -> bool {
+        let version: String = version.trim().chars().take(VERSION_LIMIT).collect();
+        if version.is_empty() {
+            return false;
+        }
+        self.edit_annotation(project, |entry| {
+            if present {
+                if entry.versions().any(|label| label == version) {
+                    return false;
+                }
+                let previous = std::mem::replace(&mut entry.version, version);
+                if !previous.is_empty() {
+                    entry.older_versions.insert(0, previous);
+                }
+                true
+            } else if entry.version == version {
+                entry.version = if entry.older_versions.is_empty() {
+                    String::new()
+                } else {
+                    entry.older_versions.remove(0)
+                };
+                true
+            } else {
+                let len = entry.older_versions.len();
+                entry.older_versions.retain(|label| *label != version);
+                entry.older_versions.len() != len
+            }
+        })
+    }
+
+    fn edit_annotation(
+        &mut self,
+        project: &Path,
+        edit: impl FnOnce(&mut Annotation) -> bool,
+    ) -> bool {
+        let key = path_key(project);
+        let annotations = Arc::make_mut(&mut self.annotations);
+        let entry = annotations.entry(key.clone()).or_default();
+        let changed = edit(entry);
+        if *entry == Annotation::default() {
+            annotations.remove(&key);
+        }
+        changed
     }
 
     pub fn add_todo(&mut self, project: &Path, title: &str) -> bool {
@@ -256,13 +358,41 @@ impl Library {
             .cloned()
     }
 
+    pub fn folders(&self) -> &[PathBuf] {
+        self.folders
+            .as_deref()
+            .unwrap_or_else(|| self.last_root.as_slice())
+    }
+
+    pub fn set_folders(&mut self, folders: Vec<PathBuf>) {
+        self.folders = Some(folders);
+    }
+
+    pub fn scan_history(&self) -> &[ScanSummary] {
+        &self.scan_history
+    }
+
+    pub fn record_workspace_scan(&mut self, report: Arc<ScanReport>) {
+        self.scan_pending = false;
+        if self.scan_history.len() >= 32 {
+            self.scan_history.remove(0);
+        }
+        self.scan_history.push(ScanSummary {
+            at: Utc::now(),
+            folders: self.folders().to_vec(),
+            projects: report.projects.len(),
+            elapsed_ms: report.elapsed_ms,
+        });
+        self.record_scan(report);
+    }
+
     pub fn record_scan(&mut self, report: Arc<ScanReport>) {
         self.last_root = Some(report.root.clone());
         self.snapshot = Some(report);
     }
 }
 
-fn path_key(path: &Path) -> String {
+pub fn path_key(path: &Path) -> String {
     if let Some(path) = path.to_str() {
         return path.to_owned();
     }
@@ -308,7 +438,7 @@ impl Store {
             "Dashboard data has unsupported schema version {}",
             data.schema_version
         );
-        // v1 lacks versions, status history, and to-dos. Serde supplies empty defaults;
+        // Serde supplies defaults for newly added fields;
         // existing tags are not dated or assigned a made-up history entry.
         data.schema_version = SCHEMA_VERSION;
         Ok(data)
@@ -341,6 +471,60 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn migrates_v2_and_persists_new_annotations_and_scan_history() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let store = Store {
+            path: dir.path().join("dashboard.json"),
+        };
+        let root = dir.path().join("workspace");
+        let project = root.join("app");
+        fs::write(
+            store.path(),
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 2,
+                "last_root": root,
+                "annotations": { (path_key(&project)): { "description": "Summary", "version": "v1", "tags": ["developing"] } }
+            }))?,
+        )?;
+
+        let mut data = store.load()?;
+        assert_eq!(data.folders(), std::slice::from_ref(&root));
+        assert!(data.set_notes(&project, "Separate notes".into()));
+        assert!(data.set_custom_tag(&project, " internal ", true));
+        assert!(!data.set_custom_tag(&project, "internal", true));
+        assert!(data.set_version_label(&project, "v2", true));
+        assert!(data.set_version_label(&project, "v3", true));
+        assert!(!data.set_version_label(&project, "v1", true));
+        assert!(data.set_version_label(&project, "v3", false));
+        data.set_folders(vec![root.clone(), dir.path().join("another")]);
+        let report = Arc::new(ScanReport {
+            root,
+            projects: vec![],
+            visited_directories: 1,
+            skipped_entries: 0,
+            elapsed_ms: 12,
+        });
+        data.scan_pending = true;
+        store.save(&data)?;
+        let mut data = store.load()?;
+        assert!(data.scan_pending);
+        data.record_workspace_scan(report);
+        store.save(&data)?;
+        let data = store.load()?;
+        let entry = data.annotation(&project).unwrap();
+        assert_eq!(entry.description, "Summary");
+        assert_eq!(entry.notes, "Separate notes");
+        assert_eq!(entry.custom_tags, BTreeSet::from(["internal".into()]));
+        assert_eq!(entry.versions().collect::<Vec<_>>(), ["v2", "v1"]);
+        assert_eq!(entry.tags, BTreeSet::from([Tag::Developing]));
+        assert!(!data.scan_pending);
+        assert_eq!(data.scan_history()[0].folders, data.folders());
+        assert_eq!(data.scan_history()[0].elapsed_ms, 12);
+        assert!(!project.exists());
+        Ok(())
+    }
 
     #[test]
     fn round_trips_and_replaces_state() -> Result<()> {
