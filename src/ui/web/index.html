@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; base-uri 'none'; form-action 'none'">
+  <title>Project Analyzer</title>
+  <link rel="stylesheet" href="mockup.css">
+  <link rel="stylesheet" href="layout.css">
+  <script src="catalog.js" defer></script>
+  <script src="statistics.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Workspace">
+      <div class="row brand">
+        <svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true">
+          <rect width="32" height="32" rx="8" fill="#5E6AD2"></rect>
+          <path d="M7 12a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2z" fill="#fff"></path>
+          <circle cx="17" cy="18" r="3.3" fill="none" stroke="#5E6AD2" stroke-width="1.8"></circle>
+          <path d="m19.5 20.5 3 3" stroke="#5E6AD2" stroke-width="2" stroke-linecap="round"></path>
+        </svg>
+        <b>Project Analyzer</b>
+      </div>
+      <div class="row scan-actions">
+        <button class="btn pri" id="start" data-action="start">Start scan</button>
+        <button class="btn" id="rescan" data-action="rescan">Rescan</button>
+      </div>
+      <div class="sidebar-scroll">
+        <nav id="workspace-nav" aria-label="Dashboard"></nav>
+        <h2 class="sec">Scan folders</h2>
+        <div class="mono t2 folders" id="folders"></div>
+        <button class="nav choose" id="choose" data-action="choose">+ Choose folder</button>
+        <h2 class="sec">Project type</h2>
+        <nav id="type-nav" aria-label="Project type"></nav>
+      </div>
+      <div class="sidebar-total">
+        <div class="row total-line"><span class="t3">Total projects</span><b id="total">0</b></div>
+        <div id="total-bar" aria-hidden="true"></div>
+      </div>
+    </aside>
+    <main class="panel dashboard" aria-labelledby="page-heading">
+      <div class="hd row">
+        <h1 id="page-heading">All projects</h1>
+        <span class="t3" id="page-count">0</span>
+        <span class="spacer"></span>
+        <button class="btn" id="header-action" data-action="header">Rescan</button>
+        <span class="row scan-progress" id="progress" role="status" hidden></span>
+      </div>
+      <div class="row toolbar" id="toolbar">
+        <button class="btn" id="filter-button" data-action="popover" data-menu="filter" aria-haspopup="dialog" aria-expanded="false">+ Filter</button>
+        <button class="btn" id="starred-filter" data-action="starred" aria-pressed="false">☆ Starred</button>
+        <input class="in version-search" id="version-search" type="search" aria-label="Version search" placeholder="Search version label…">
+        <span class="spacer"></span>
+        <span class="t3 cache" id="cache"></span>
+        <button class="btn" id="display-button" data-action="popover" data-menu="display" aria-haspopup="dialog" aria-expanded="false">Display</button>
+      </div>
+      <div class="notice row" id="notice" hidden>
+        <span id="notice-text" role="status"></span>
+        <button class="btn" id="retry" data-action="retry_save" hidden>Retry save</button>
+      </div>
+      <div class="project-view" id="project-view">
+        <section class="project-list" id="project-list" aria-label="Project results"></section>
+        <section class="details" id="details" aria-label="Project details">
+          <div class="t3 empty" id="detail-empty">Select a project to see its details.</div>
+          <div id="editor" hidden>
+            <div class="row detail-heading" id="detail-heading"></div>
+            <div class="mono t3 detail-path" id="detail-path"></div>
+            <h3 class="lb">Properties</h3>
+            <div class="pr">
+              <span>Status</span>
+              <div class="row status-value" id="status-value"></div>
+              <button class="btn compact" id="change-status" data-action="popover" data-menu="status" aria-haspopup="dialog" aria-expanded="false">Change</button>
+            </div>
+            <div class="pr" id="repo-property"></div>
+            <div class="pr"><span>Languages</span><div class="property-values" id="stack"></div></div>
+            <div class="pr">
+              <span>Tags</span>
+              <div class="property-values">
+                <div class="contents" id="tags"></div>
+                <form data-add="tag"><input class="in add-label tag-input" aria-label="Add tag" placeholder="+ Add tag" maxlength="64"></form>
+              </div>
+            </div>
+            <div class="pr">
+              <span>Versions</span>
+              <div class="property-values">
+                <div class="contents" id="versions"></div>
+                <form data-add="version"><input class="in add-label version-input" aria-label="Add version" placeholder="+ Add version" maxlength="64"></form>
+              </div>
+            </div>
+            <div class="text-fields">
+              <div><label class="lb" for="summary">Summary</label><textarea class="in" id="summary" rows="4" maxlength="8000"></textarea></div>
+              <div><label class="lb" for="notes">Notes</label><textarea class="in" id="notes" rows="4" maxlength="8000"></textarea></div>
+            </div>
+            <h3 class="lb row"><span>To-dos</span><span class="spacer"></span><span id="todo-count"></span></h3>
+            <div id="todos"></div>
+            <form class="add-task" data-add="add_todo"><input class="in" aria-label="New task" placeholder="Add a task…" maxlength="240"></form>
+            <h3 class="lb">Activity</h3>
+            <div class="t2 activity" id="activity"></div>
+            <div id="sources" hidden></div>
+          </div>
+        </section>
+      </div>
+      <section class="stats" id="statistics" aria-label="Workspace statistics" hidden></section>
+    </main>
+  </div>
+  <div class="popover" id="popover" role="dialog" hidden></div>
+</body>
+</html>

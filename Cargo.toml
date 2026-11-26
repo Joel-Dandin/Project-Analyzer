@@ -7,7 +7,7 @@ description = "A read-only desktop inventory of local software projects"
 
 [features]
 default = ["gui"]
-gui = ["dep:gpui", "dep:gpui-component"]
+gui = ["dep:rfd", "dep:tao", "dep:wry"]
 
 [[bin]]
 name = "project-analyser"
@@ -20,8 +20,6 @@ chrono = { version = "0.4", default-features = false, features = ["now", "serde"
 directories = "6"
 dunce = "1"
 globset = "0.4"
-gpui = { version = "=0.2.2", optional = true }
-gpui-component = { version = "=0.5.1", optional = true }
 ignore = "0.4"
 roxmltree = "0.20"
 serde = { version = "1", features = ["derive", "rc"] }
@@ -31,9 +29,9 @@ tempfile = "3"
 toml = "0.8"
 url = "2"
 
-[patch.crates-io]
-# GPUI's tar dependency still requires xattr 0.2.x. See the patch notes in vendor/.
-xattr = { path = "vendor/xattr-0.2.3" }
+rfd = { version = "0.17.2", default-features = false, features = ["gtk3"], optional = true }
+tao = { version = "0.37.2", default-features = false, features = ["rwh_06", "x11"], optional = true }
+wry = { version = "0.57.1", default-features = false, features = ["os-webview"], optional = true }
 
 [lints.rust]
 unsafe_code = "forbid"
