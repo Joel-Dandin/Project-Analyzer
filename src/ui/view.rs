@@ -1,15 +1,19 @@
 mod statistics;
+mod tracking;
 
 use gpui::{prelude::FluentBuilder as _, *};
 use gpui_component::{
     Disableable, Sizable,
     button::{Button, ButtonVariants},
     input::Input,
+    select::Select,
     skeleton::Skeleton,
 };
 use project_analyser::{scanner::Project, storage::Tag};
 
-use super::Dashboard;
+use crate::assets::LOGO;
+
+use super::{Dashboard, catalog::ProjectFilter};
 
 const CANVAS: u32 = 0x0e131d;
 const PANEL: u32 = 0x141b28;
@@ -72,9 +76,7 @@ impl Dashboard {
                     .size(px(40.))
                     .rounded_lg()
                     .bg(rgb(0x173c38))
-                    .text_color(rgb(MINT))
-                    .font_weight(FontWeight::BOLD)
-                    .child("PA"),
+                    .child(svg().path(LOGO).size(px(27.)).text_color(rgb(MINT))),
             )
             .child(
                 div()
@@ -324,6 +326,12 @@ impl Dashboard {
                     .child(
                         Input::new(&self.search)
                             .disabled(self.catalog.is_none() || self.draft.is_some()),
+                    )
+                    .child(
+                        Select::new(&self.type_select)
+                            .title_prefix("Type: ")
+                            .w_full()
+                            .disabled(self.catalog.is_none() || self.draft.is_some()),
                     ),
             )
             .when(cold_loading, |this| this.child(inventory_skeleton()))
@@ -335,18 +343,14 @@ impl Dashboard {
                     )
                 } else if self.catalog.is_none() {
                     ("No results yet", "Use Refresh to scan this folder.")
-                } else if self.favorites_only {
-                    (
-                        "No favorites to show",
-                        "Change the search or choose Show all to find projects to favorite.",
-                    )
-                } else if !self.query.trim().is_empty()
-                    && self
-                        .catalog
-                        .as_ref()
-                        .is_some_and(|catalog| !catalog.report.projects.is_empty())
+                } else if self.favorites_only
+                    || self.project_filter != ProjectFilter::All
+                    || !self.query.trim().is_empty()
                 {
-                    ("No matches", "Try a different name, stack or status.")
+                    (
+                        "No matches",
+                        "Change the search, project type, or favorites filter.",
+                    )
                 } else {
                     (
                         "No projects found",
@@ -392,10 +396,12 @@ impl Dashboard {
             .as_deref()
             .map_or(project.path.as_path(), |root| project.relative_path(root));
         let path = relative.display().to_string();
-        let tag = self
-            .library
-            .annotation(&project.path)
-            .and_then(|a| a.tags.first().copied());
+        let annotation = self.library.annotation(&project.path);
+        let tag = annotation.and_then(|a| a.tags.first().copied());
+        let subtitle = match annotation.filter(|a| !a.version.is_empty()) {
+            Some(entry) => format!("{kind} · {} · {path}", entry.version),
+            None => format!("{kind} · {path}"),
+        };
         let favorite = self.library.is_favorite(&project.path);
         let height = px(64.);
         div().h(height).w_full().px_2().py_1().child(
@@ -475,7 +481,7 @@ impl Dashboard {
                                 .truncate()
                                 .text_xs()
                                 .text_color(rgb(MUTED))
-                                .child(format!("{kind} · {path}")),
+                                .child(subtitle),
                         ),
                 )
                 .children(tag.map(|tag| chip(tag.label().into(), tag_color(tag)))),
@@ -596,6 +602,8 @@ impl Dashboard {
                     .py_4()
                     .gap_4()
                     .child(self.annotation(project, cx))
+                    .child(self.todos(project, cx))
+                    .child(self.status_history(project, cx))
                     .child(self.technology(project))
                     .child(self.repository(project))
                     .child(self.components(project, cx)),
@@ -609,6 +617,9 @@ impl Dashboard {
         let description = annotation
             .map(|annotation| annotation.description.as_str())
             .unwrap_or_default();
+        let version = annotation
+            .map(|annotation| annotation.version.as_str())
+            .unwrap_or_default();
         let editing = self.draft.as_ref();
         section()
             .child(
@@ -617,7 +628,7 @@ impl Dashboard {
                     .items_center()
                     .justify_between()
                     .gap_2()
-                    .child(section_title("Notes & status"))
+                    .child(section_title("Notes, version & status"))
                     .when(editing.is_none(), |this| {
                         this.child(
                             Button::new("edit-annotation")
@@ -632,6 +643,8 @@ impl Dashboard {
             .when_some(editing, |this, draft| {
                 this.child(eyebrow("DESCRIPTION"))
                     .child(Input::new(&self.description).w_full().h(px(118.)))
+                    .child(eyebrow("VERSION TAG"))
+                    .child(Input::new(&self.version).w_full())
                     .child(eyebrow("STATUS TAGS"))
                     .child(
                         div()
@@ -695,6 +708,14 @@ impl Dashboard {
                         .flex()
                         .flex_wrap()
                         .gap_2()
+                        .child(chip(
+                            if version.is_empty() {
+                                "No version".into()
+                            } else {
+                                format!("Version: {version}").into()
+                            },
+                            if version.is_empty() { MUTED } else { VIOLET },
+                        ))
                         .when(tags.is_none_or(|tags| tags.is_empty()), |this| {
                             this.child(chip("No status".into(), MUTED))
                         })
@@ -1052,6 +1073,9 @@ fn kind_color(kind: &str) -> u32 {
         "Back end" => VIOLET,
         "Front end" => BLUE,
         "Desktop" | "Mobile" => AMBER,
+        "Android" => MINT,
+        "iOS" => VIOLET,
+        "Android & iOS" | "Gradle" => BLUE,
         _ => MUTED,
     }
 }
@@ -1063,6 +1087,10 @@ fn kind_code(kind: &str) -> &'static str {
         "Front end" => "FE",
         "Desktop" => "DT",
         "Mobile" => "MB",
+        "Android" => "AN",
+        "iOS" => "iOS",
+        "Android & iOS" => "AI",
+        "Gradle" => "GR",
         _ => "PR",
     }
 }

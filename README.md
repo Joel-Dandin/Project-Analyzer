@@ -55,22 +55,25 @@ The workflow builds an Apple silicon command-line archive from which you can lau
 ## Use the dashboard
 
 1. Click **Choose folder** and select a workspace or a parent directory. The selected path stays at the top; use **Copy root** if the path is truncated.
-2. Search by project name, path, stack, Git repository, or saved description and tags. Select a result to see its classification, Git information, and the folders that contributed evidence.
-3. Under **Notes & status**, choose **Edit**, enter a description, select one or more status tags, and click **Save**. Available tags: Planned, In progress, Developing, On hold, Completed, Archived, and Cancelled.
-4. Use **Add favorite** in the details pane to star a project. **Favorites only** narrows the current workspace's inventory and combines with search. Favorites persist across launches.
-5. Use **Refresh** to rescan or **Cancel scan** to stop. The dashboard shows skeletons while loading its first result and keeps its last result visible during a same-workspace refresh.
+2. Search by project name, path, stack, Git repository, description, status, or version. Use **Type** to show non-mobile Gradle projects, all mobile projects, Android, or iOS. An **Android & iOS** project appears in both platform filters. Select a result to see its classification, Git information, and contributing folders.
+3. Under **Notes, version & status**, choose **Edit** to update the description, enter a version tag (for example `1.2.0-rc.1`), or select status tags. Clear the version field to remove the tag. **Save** records status changes in **Status history**, newest first, with the previous and new tags and a UTC timestamp. Cancelling an edit or saving without changing the status tags does not add an entry. Existing tags are preserved when upgrading; history starts with the next status change.
+4. Under **Project to-dos**, choose **New to-do**, enter a task, and click **Add** or press Enter. Use the checkbox to complete or reopen a task and **Remove** to delete it. Changes save as you make them.
+5. Use **Add favorite** in the details pane to star a project. **Favorites only** combines with search and the type filter. Favorites persist across launches.
+6. Use **Refresh** to rescan or **Cancel scan** to stop. The dashboard shows skeletons while loading its first result and keeps its last result visible during a same-workspace refresh.
 
-Click **Statistics** to see project counts by type, the six most common technologies, local Git and remote coverage, and the last successful scan's duration and folder counts. These figures cover the whole workspace, independent of search and the favorites filter. A technology counts once per project. Choose **Project details** or select a project to return to the details pane.
+Click **Statistics** to see project counts by type, the six most common technologies, local Git and remote coverage, and the last successful scan's duration and folder counts. These figures cover the whole workspace, independent of search, type, and favorites filters. A technology counts once per project. Choose **Project details** or select a project to return to the details pane.
 
 ## What is detected?
 
 The scanner recognizes project manifests, framework configuration, and selected source entry points. It supports, among others, React/Vue/Angular, Node back ends, Python/Flask/Django/FastAPI, Rust/Tauri, Spring Boot, and .NET. Grouping uses Git boundaries, workspace declarations, or conventional sibling directories. For example, a React `frontend` next to a Spring Boot `backend` can appear as **Full stack** with both stack labels and component paths. Classification is heuristic.
 
+Gradle is a build tool, not a mobile indicator. Android detection uses an applied Android Gradle plugin or an `AndroidManifest.xml`; iOS detection uses iPhone/iPad build settings in an Xcode project. A macOS-only Xcode project or Swift package is not sufficient evidence of an iOS app. Flutter, React Native, and Expo projects may be listed as **Mobile** until native platform evidence is found. Refresh a previously scanned workspace to apply the new classification.
+
 Git metadata comes from local configuration and refs. The dashboard shows the remote host, repository, and owner or organization, including a distinct push destination when present. **Tracking refs do not verify that your commits were pushed.** The app does not contact Git hosts.
 
 ## Local data and interruption recovery
 
-**The scanner does not modify, execute, or upload scanned projects.** Descriptions, status tags, favorites, the last folder, and the latest successful inventory are saved to the app's `dashboard.json`. On Windows, the usual path is `%LOCALAPPDATA%\Workspace Tools\Project Analyser\data\dashboard.json`; **Copy data file path** gives the exact path. Close the app before editing or backing up the JSON. Notes and favorites are keyed by project path, so moving or renaming projects does not carry them over automatically.
+**The scanner does not modify, execute, or upload scanned projects.** Descriptions, status tags and their history, version tags, to-dos, favorites, the last folder, and the latest successful inventory are saved to the app's `dashboard.json`. On Windows, the usual path is `%LOCALAPPDATA%\Workspace Tools\Project Analyser\data\dashboard.json`; **Copy data file path** gives the exact path. Close the app before editing or backing up the JSON. Project metadata and favorites are keyed by project path, so moving or renaming projects does not carry them over automatically.
 
 If a terminal closure also stops a terminal-launched app, reopen the binary. The dashboard loads the last successfully saved workspace and matching snapshot and starts a fresh background scan. A forced stop during saving leaves the previous committed file intact. Unsaved edits and interrupted scans do not resume from their in-memory state. On Windows, launching the built binary from Explorer or with `Start-Process` avoids tying it to a foreground `cargo run`.
 

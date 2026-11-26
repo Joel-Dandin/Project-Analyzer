@@ -6,7 +6,7 @@ use std::{
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 
 use super::{
-    model::{Project, Role},
+    model::{ANDROID, GRADLE, GRADLE_KOTLIN, IOS, Project, Role},
     rules::Evidence,
 };
 
@@ -122,6 +122,10 @@ struct LayoutSignals {
     backend: bool,
     tauri: bool,
     node: bool,
+    gradle: bool,
+    android: bool,
+    ios: bool,
+    mobile_container: bool,
 }
 
 impl LayoutSignals {
@@ -130,6 +134,12 @@ impl LayoutSignals {
         self.backend |= entry.roles.contains(&Role::Backend);
         self.tauri |= entry.stack.contains("Tauri");
         self.node |= entry.stack.contains("Node.js");
+        self.gradle |= entry.stack.contains(GRADLE) || entry.stack.contains(GRADLE_KOTLIN);
+        self.android |= entry.stack.contains(ANDROID);
+        self.ios |= entry.stack.contains(IOS);
+        self.mobile_container |= ["Flutter", "React Native", "Expo"]
+            .into_iter()
+            .any(|framework| entry.stack.contains(framework));
     }
 }
 
@@ -143,6 +153,15 @@ fn conventional_layouts<'a>(all: &BTreeMap<&'a Path, LayoutSignals>) -> BTreeSet
         let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
+        // A cross-platform app's Android folder may only have workspace settings;
+        // evidence from its app module is assigned to it by the workspace rule.
+        if ((name == "android" && (entry.android || entry.gradle)) || (name == "ios" && entry.ios))
+            && all
+                .get(parent)
+                .is_some_and(|parent| parent.mobile_container)
+        {
+            members.insert(path);
+        }
         match name {
             "frontend" | "front-end" | "web" | "client" | "ui" if entry.frontend => {
                 siblings.entry(parent).or_default().front.push(path);

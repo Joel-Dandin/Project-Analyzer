@@ -99,9 +99,15 @@ pub fn scan(root: &Path, control: &ScanControl) -> Result<Option<ScanReport>> {
     for batch in batches {
         skipped_entries += batch.errors;
         for candidate in batch.candidates {
-            if let Some(parent) = candidate.path.parent() {
+            if let Some(directory) = candidate.directory() {
+                // A selected source-set or Xcode bundle can have a logical owner outside the scan.
+                let directory = if directory.starts_with(&root) {
+                    directory
+                } else {
+                    &root
+                };
                 candidates
-                    .entry(parent.to_path_buf())
+                    .entry(directory.to_path_buf())
                     .or_default()
                     .push(candidate);
             }

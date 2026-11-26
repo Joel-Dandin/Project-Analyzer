@@ -11,10 +11,11 @@ use toml::Value as Toml;
 
 use super::{
     files::read_small_text,
-    model::{Component, Role},
+    model::{ANDROID, Component, GRADLE, GRADLE_KOTLIN, IOS, Role},
 };
 
 const MANIFEST_LIMIT: u64 = 256 * 1024;
+const XCODE_LIMIT: u64 = 1024 * 1024;
 
 #[derive(Default)]
 pub(super) struct Evidence {
@@ -77,6 +78,8 @@ pub(super) enum Rule {
     Maven,
     Gradle,
     GradleSettings,
+    AndroidManifest,
+    Xcode,
     Go,
     GoWorkspace,
     GoSource,
@@ -116,6 +119,8 @@ impl Rule {
             "pom.xml" => Self::Maven,
             "build.gradle" | "build.gradle.kts" => Self::Gradle,
             "settings.gradle" | "settings.gradle.kts" => Self::GradleSettings,
+            "AndroidManifest.xml" => Self::AndroidManifest,
+            "project.pbxproj" => Self::Xcode,
             "go.mod" => Self::Go,
             "go.work" => Self::GoWorkspace,
             "main.go" => Self::GoSource,
@@ -142,6 +147,33 @@ pub(super) struct Candidate {
     pub rule: Rule,
 }
 
+impl Candidate {
+    pub fn directory(&self) -> Option<&Path> {
+        let parent = self.path.parent()?;
+        match self.rule {
+            Rule::AndroidManifest => {
+                // <module>/src/<source set>/AndroidManifest.xml belongs to the module.
+                // A top-level manifest is also valid in older projects.
+                if let Some(src) = parent
+                    .parent()
+                    .filter(|dir| dir.file_name().is_some_and(|name| name == "src"))
+                {
+                    src.parent()
+                } else {
+                    Some(parent)
+                }
+            }
+            Rule::Xcode => parent
+                .file_name()?
+                .to_str()?
+                .ends_with(".xcodeproj")
+                .then(|| parent.parent())
+                .flatten(),
+            _ => Some(parent),
+        }
+    }
+}
+
 pub(super) fn inspect(files: &[Candidate], cancelled: &AtomicBool) -> (Evidence, usize) {
     let mut evidence = Evidence::default();
     let mut failures = 0;
@@ -166,7 +198,12 @@ pub(super) fn inspect(files: &[Candidate], cancelled: &AtomicBool) -> (Evidence,
             evidence.signal(name);
             continue;
         }
-        match read_small_text(path, MANIFEST_LIMIT) {
+        let limit = if matches!(rule, Rule::Xcode) {
+            XCODE_LIMIT
+        } else {
+            MANIFEST_LIMIT
+        };
+        match read_small_text(path, limit) {
             Ok(text) => apply(*rule, name, &text, &mut evidence),
             Err(_) => failures += 1,
         }
@@ -388,9 +425,9 @@ fn apply(rule: Rule, name: &str, text: &str, evidence: &mut Evidence) {
             evidence.declare(
                 name,
                 if name.ends_with(".kts") {
-                    "Gradle (Kotlin DSL)"
+                    GRADLE_KOTLIN
                 } else {
-                    "Gradle"
+                    GRADLE
                 },
             );
             for line in code_lines(text) {
@@ -400,9 +437,8 @@ fn apply(rule: Rule, name: &str, text: &str, evidence: &mut Evidence) {
                 if line.contains("io.quarkus") {
                     evidence.role(Role::Backend, "Quarkus");
                 }
-                if line.contains("com.android.application") || line.contains("com.android.library")
-                {
-                    evidence.role(Role::Mobile, "Android");
+                if matches!(rule, Rule::Gradle) && android_plugin(line) {
+                    evidence.role(Role::Mobile, ANDROID);
                 }
                 if matches!(rule, Rule::GradleSettings)
                     && let Some(rest) = line.strip_prefix("include")
@@ -414,6 +450,28 @@ fn apply(rule: Rule, name: &str, text: &str, evidence: &mut Evidence) {
                             .push(member.trim_start_matches(':').replace(':', "/"));
                     }
                 }
+            }
+        }
+        Rule::AndroidManifest => {
+            if roxmltree::Document::parse(text)
+                .is_ok_and(|document| document.root_element().has_tag_name("manifest"))
+            {
+                evidence.declare(name, ANDROID);
+                evidence.role(Role::Mobile, ANDROID);
+            }
+        }
+        Rule::Xcode => {
+            evidence.declare(name, "Xcode");
+            if code_lines(text)
+                .flat_map(|line| {
+                    line.split("//")
+                        .next()
+                        .unwrap_or(line)
+                        .split(['{', '}', ';'])
+                })
+                .any(ios_build_setting)
+            {
+                evidence.role(Role::Mobile, IOS);
             }
         }
         Rule::Go => {
@@ -560,9 +618,67 @@ fn apply(rule: Rule, name: &str, text: &str, evidence: &mut Evidence) {
     }
 }
 
+fn android_plugin(line: &str) -> bool {
+    line.split("//")
+        .next()
+        .unwrap_or(line)
+        .split(['{', '}', ';'])
+        .any(applies_android_plugin)
+}
+
+fn applies_android_plugin(statement: &str) -> bool {
+    let Some(at) = statement.find(['\'', '"']) else {
+        return false;
+    };
+    let (prefix, quoted) = statement.split_at(at);
+    let mut declaration = prefix
+        .split(|c: char| c.is_whitespace() || matches!(c, '(' | ':' | '='))
+        .filter(|token| !token.is_empty());
+    if !matches!(
+        (declaration.next(), declaration.next(), declaration.next()),
+        (Some("id"), None, None) | (Some("apply"), Some("plugin"), None)
+    ) {
+        return false;
+    }
+
+    let Some((id, suffix)) = quoted[1..].split_once(char::from(quoted.as_bytes()[0])) else {
+        return false;
+    };
+    if !matches!(
+        id,
+        "com.android.application" | "com.android.library" | "com.android.dynamic-feature"
+    ) {
+        return false;
+    }
+
+    // A root build can declare an Android plugin version without applying it.
+    let tokens = suffix
+        .split(|c: char| c.is_whitespace() || matches!(c, '(' | ')'))
+        .filter(|token| !token.is_empty());
+    !tokens
+        .clone()
+        .zip(tokens.skip(1))
+        .any(|pair| pair == ("apply", "false"))
+}
+
+fn ios_build_setting(line: &str) -> bool {
+    let Some((key, value)) = line.split_once('=') else {
+        return false;
+    };
+    match key.trim().trim_matches('"') {
+        "IPHONEOS_DEPLOYMENT_TARGET" => true,
+        "SDKROOT" | "SUPPORTED_PLATFORMS" => value
+            .split(|c: char| !c.is_ascii_alphabetic())
+            .any(|platform| matches!(platform, "iphoneos" | "iphonesimulator")),
+        _ => false,
+    }
+}
+
 fn node_dependency(package: &str, evidence: &mut Evidence) {
     match package {
         "react" | "react-dom" => evidence.role(Role::Frontend, "React"),
+        "react-native" => evidence.role(Role::Mobile, "React Native"),
+        "expo" => evidence.role(Role::Mobile, "Expo"),
         "next" => evidence.role(Role::Frontend, "Next.js"),
         "vue" => evidence.role(Role::Frontend, "Vue"),
         "nuxt" => evidence.role(Role::Frontend, "Nuxt"),
@@ -577,7 +693,6 @@ fn node_dependency(package: &str, evidence: &mut Evidence) {
         "hono" => evidence.role(Role::Backend, "Hono"),
         "electron" => evidence.role(Role::Desktop, "Electron"),
         "@tauri-apps/api" | "@tauri-apps/cli" => evidence.role(Role::Desktop, "Tauri"),
-        "react-native" | "expo" => evidence.role(Role::Mobile, "React Native"),
         "typescript" => evidence.stack("TypeScript"),
         "vite" => evidence.stack("Vite"),
         _ => {}

@@ -7,6 +7,46 @@ use project_analyser::{
 
 use super::stats::ReportStats;
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum ProjectFilter {
+    #[default]
+    All,
+    Gradle,
+    Mobile,
+    Android,
+    Ios,
+}
+
+impl ProjectFilter {
+    pub const ALL: [Self; 5] = [
+        Self::All,
+        Self::Gradle,
+        Self::Mobile,
+        Self::Android,
+        Self::Ios,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "All project types",
+            Self::Gradle => "Gradle (non-mobile)",
+            Self::Mobile => "Mobile (all platforms)",
+            Self::Android => "Android",
+            Self::Ios => "iOS",
+        }
+    }
+
+    fn matches(self, project: &Project) -> bool {
+        match self {
+            Self::All => true,
+            Self::Gradle => project.is_gradle() && !project.is_mobile(),
+            Self::Mobile => project.is_mobile(),
+            Self::Android => project.is_android(),
+            Self::Ios => project.is_ios(),
+        }
+    }
+}
+
 /// Immutable search data is prepared with the report, off the UI thread.
 pub(super) struct Catalog {
     pub report: Arc<ScanReport>,
@@ -66,18 +106,27 @@ impl Catalog {
             .ok()
     }
 
-    pub fn filter(&self, query: &str, library: &Library, favorites_only: bool) -> Vec<usize> {
+    pub fn filter(
+        &self,
+        query: &str,
+        library: &Library,
+        favorites_only: bool,
+        project_filter: ProjectFilter,
+    ) -> Vec<usize> {
         let query = query.to_lowercase();
         let words: Vec<_> = query.split_whitespace().collect();
-        if words.is_empty() && !favorites_only {
+        if words.is_empty() && !favorites_only && project_filter == ProjectFilter::All {
             return (0..self.index.len()).collect();
         }
         self.index
             .iter()
             .enumerate()
             .filter_map(|(i, text)| {
-                let path = &self.report.projects[i].path;
-                if favorites_only && !library.is_favorite(path) {
+                let project = &self.report.projects[i];
+                let path = &project.path;
+                if !project_filter.matches(project)
+                    || (favorites_only && !library.is_favorite(path))
+                {
                     return None;
                 }
                 let mut missing = words
@@ -89,9 +138,11 @@ impl Catalog {
                 }
                 let annotation = library.annotation(path)?;
                 let description = annotation.description.to_lowercase();
+                let version = annotation.version.to_lowercase();
                 missing
                     .all(|word| {
                         description.contains(*word)
+                            || version.contains(*word)
                             || annotation
                                 .tags
                                 .iter()
@@ -109,7 +160,7 @@ mod tests {
 
     use project_analyser::{
         scanner::{Remote, RemoteLocation, Repository, Role},
-        storage::{Annotation, Tag},
+        storage::Tag,
     };
 
     use super::*;
@@ -156,35 +207,118 @@ mod tests {
         }));
         let mut library = Library::default();
         assert_eq!(
-            catalog.filter("Spring react example.org", &library, false),
+            catalog.filter(
+                "Spring react example.org",
+                &library,
+                false,
+                ProjectFilter::All
+            ),
             [0]
         );
         assert_eq!(catalog.stats.full_stack(), 1);
         assert_eq!(catalog.stats.with_remotes, 1);
         assert_eq!(catalog.position(&path), Some(0));
-        assert!(catalog.filter("archived", &library, false).is_empty());
+        assert!(
+            catalog
+                .filter("archived", &library, false, ProjectFilter::All)
+                .is_empty()
+        );
         library.set_annotation(
             &path,
-            Annotation {
-                description: "Quarterly promotion".to_owned(),
-                tags: BTreeSet::from([Tag::Archived]),
-            },
+            "Quarterly promotion".into(),
+            BTreeSet::from([Tag::Archived]),
+            "v1.2.3-rc1",
         );
         assert_eq!(
-            catalog.filter("ARCHIVED promotion React", &library, false),
+            catalog.filter(
+                "ARCHIVED promotion React V1.2.3-RC1",
+                &library,
+                false,
+                ProjectFilter::All
+            ),
             [0]
         );
         assert!(
             catalog
-                .filter("ARCHIVED missing", &library, false)
+                .filter("ARCHIVED missing", &library, false, ProjectFilter::All)
                 .is_empty()
         );
-        assert_eq!(catalog.filter("react", &library, false), [0, 1]);
-        assert!(catalog.filter("", &library, true).is_empty());
+        assert_eq!(
+            catalog.filter("react", &library, false, ProjectFilter::All),
+            [0, 1]
+        );
+        assert!(
+            catalog
+                .filter("", &library, true, ProjectFilter::All)
+                .is_empty()
+        );
         assert!(library.set_favorite(&path, true));
-        assert_eq!(catalog.filter("", &library, true), [0]);
-        assert_eq!(catalog.filter("React", &library, true), [0]);
-        assert_eq!(catalog.filter("archived", &library, true), [0]);
-        assert!(catalog.filter("storefront", &library, true).is_empty());
+        assert_eq!(catalog.filter("", &library, true, ProjectFilter::All), [0]);
+        assert_eq!(
+            catalog.filter("React", &library, true, ProjectFilter::All),
+            [0]
+        );
+        assert_eq!(
+            catalog.filter("archived", &library, true, ProjectFilter::All),
+            [0]
+        );
+        assert!(
+            catalog
+                .filter("storefront", &library, true, ProjectFilter::All)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn filters_gradle_and_mobile_platforms_independently_of_search_and_favorites() {
+        let project = |name: &str, stacks: &[&str], roles: &[Role]| Project {
+            path: Path::new("workspace").join(name),
+            roles: roles.iter().copied().collect(),
+            stack: stacks.iter().map(|item| (*item).to_owned()).collect(),
+            components: Vec::new(),
+            repository: None,
+        };
+        let catalog = Catalog::new(Arc::new(ScanReport {
+            root: "workspace".into(),
+            projects: vec![
+                project("api", &["Gradle", "Spring Boot"], &[Role::Backend]),
+                project(
+                    "droid",
+                    &["Gradle (Kotlin DSL)", "Android"],
+                    &[Role::Mobile],
+                ),
+                project("flutter", &["Flutter"], &[Role::Mobile]),
+                project("phone", &["iOS"], &[Role::Mobile]),
+                project("shared", &["Android", "iOS", "Flutter"], &[Role::Mobile]),
+            ],
+            visited_directories: 0,
+            skipped_entries: 0,
+            elapsed_ms: 0,
+        }));
+        let mut library = Library::default();
+        assert!(library.set_favorite(&catalog.report.projects[4].path, true));
+        assert_eq!(
+            catalog.filter("", &library, false, ProjectFilter::Gradle),
+            [0]
+        );
+        assert_eq!(
+            catalog.filter("", &library, false, ProjectFilter::Mobile),
+            [1, 2, 3, 4]
+        );
+        assert_eq!(
+            catalog.filter("", &library, false, ProjectFilter::Android),
+            [1, 4]
+        );
+        assert_eq!(
+            catalog.filter("", &library, false, ProjectFilter::Ios),
+            [3, 4]
+        );
+        assert_eq!(
+            catalog.filter("flutter", &library, true, ProjectFilter::Mobile),
+            [4]
+        );
+        assert_eq!(catalog.stats.kinds["Android"], 1);
+        assert_eq!(catalog.stats.kinds["Android & iOS"], 1);
+        assert_eq!(catalog.stats.kinds["iOS"], 1);
     }
 }

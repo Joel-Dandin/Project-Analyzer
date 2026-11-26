@@ -2,22 +2,44 @@ mod catalog;
 mod stats;
 mod view;
 
-use std::{collections::BTreeSet, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeSet,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 
 use gpui::{
     AppContext as _, Context, Entity, PathPromptOptions, ScrollHandle, ScrollStrategy,
-    Subscription, UniformListScrollHandle, Window, point, px,
+    SharedString, Subscription, UniformListScrollHandle, Window, point, px,
 };
-use gpui_component::input::{InputEvent, InputState};
+use gpui_component::{
+    IndexPath,
+    input::{InputEvent, InputState},
+    select::{SelectEvent, SelectItem, SelectState},
+};
 use project_analyser::{
     scanner::{Phase, Project, ScanControl, scan},
-    storage::{Annotation, Library, Store, Tag},
+    storage::{Library, Store, TODO_LIMIT, Tag, VERSION_LIMIT},
 };
 
-use catalog::Catalog;
+use catalog::{Catalog, ProjectFilter};
+
+impl SelectItem for ProjectFilter {
+    type Value = Self;
+
+    fn title(&self) -> SharedString {
+        self.label().into()
+    }
+
+    fn value(&self) -> &Self {
+        self
+    }
+}
 
 const DESCRIPTION_LIMIT: usize = 8_000;
 const COMPONENTS_PER_PAGE: usize = 20;
+const HISTORY_PAGE_SIZE: usize = 10;
 
 struct ActiveScan(Arc<ScanControl>);
 
@@ -30,6 +52,12 @@ impl Drop for ActiveScan {
 struct Draft {
     project: PathBuf,
     tags: BTreeSet<Tag>,
+}
+
+struct TodoDraft {
+    project: PathBuf,
+    input: Entity<InputState>,
+    _events: Subscription,
 }
 
 pub struct Dashboard {
@@ -50,27 +78,53 @@ pub struct Dashboard {
     info: Option<String>,
     show_statistics: bool,
     favorites_only: bool,
+    project_filter: ProjectFilter,
+    type_select: Entity<SelectState<Vec<ProjectFilter>>>,
     query: String,
     search: Entity<InputState>,
     description: Entity<InputState>,
+    version: Entity<InputState>,
     visible: Vec<usize>,
     selected: Option<usize>,
     draft: Option<Draft>,
+    todo_draft: Option<TodoDraft>,
+    history_limit: usize,
     component_limit: usize,
     list_scroll: UniformListScrollHandle,
     detail_scroll: ScrollHandle,
     _search_events: Subscription,
+    _type_events: Subscription,
 }
 
 impl Dashboard {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let search =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Search projects, stack or tags"));
+        let search = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("Search name, stack, tags or version")
+        });
         let description = cx.new(|cx| {
             InputState::new(window, cx)
                 .multi_line(true)
                 .rows(5)
                 .placeholder("What is this project for?")
+        });
+        let version = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("e.g. 1.2.0-rc.1")
+                .validate(|text, _| text.chars().count() <= VERSION_LIMIT)
+        });
+        let type_select = cx.new(|cx| {
+            SelectState::new(
+                ProjectFilter::ALL.to_vec(),
+                Some(IndexPath::new(0)),
+                window,
+                cx,
+            )
+        });
+        let type_events = cx.subscribe(&type_select, |this, _, event, cx| {
+            let SelectEvent::Confirm(filter) = event;
+            this.project_filter = filter.unwrap_or_default();
+            this.rebuild_filter(true);
+            cx.notify();
         });
         let search_events = cx.subscribe(&search, |this, entity, event, cx| match event {
             InputEvent::Change => {
@@ -148,16 +202,22 @@ impl Dashboard {
             info: None,
             show_statistics: false,
             favorites_only: false,
+            project_filter: ProjectFilter::default(),
+            type_select,
             query: String::new(),
             search,
             description,
+            version,
             visible: Vec::new(),
             selected: None,
             draft: None,
+            todo_draft: None,
+            history_limit: HISTORY_PAGE_SIZE,
             component_limit: COMPONENTS_PER_PAGE,
             list_scroll: UniformListScrollHandle::new(),
             detail_scroll: ScrollHandle::new(),
             _search_events: search_events,
+            _type_events: type_events,
         }
     }
 
@@ -298,11 +358,18 @@ impl Dashboard {
     fn reset_details(&mut self) {
         self.detail_scroll.set_offset(point(px(0.), px(0.)));
         self.component_limit = COMPONENTS_PER_PAGE;
+        self.history_limit = HISTORY_PAGE_SIZE;
+        self.todo_draft = None;
     }
 
     fn rebuild_filter(&mut self, reset_scroll: bool) {
         self.visible = self.catalog.as_ref().map_or_else(Vec::new, |catalog| {
-            catalog.filter(&self.query, &self.library, self.favorites_only)
+            catalog.filter(
+                &self.query,
+                &self.library,
+                self.favorites_only,
+                self.project_filter,
+            )
         });
         if self.draft.is_none()
             && !self
@@ -366,13 +433,16 @@ impl Dashboard {
         let Some(project) = self.selected_project().map(|project| project.path.clone()) else {
             return;
         };
-        let Annotation { description, tags } = self
-            .library
-            .annotation(&project)
-            .cloned()
+        let saved = self.library.annotation(&project);
+        let description = saved
+            .map(|entry| entry.description.clone())
             .unwrap_or_default();
+        let tags = saved.map(|entry| entry.tags.clone()).unwrap_or_default();
+        let version = saved.map(|entry| entry.version.clone()).unwrap_or_default();
         self.description
             .update(cx, |input, cx| input.set_value(description, window, cx));
+        self.version
+            .update(cx, |input, cx| input.set_value(version, window, cx));
         self.draft = Some(Draft { project, tags });
         self.reset_details();
         self.info = None;
@@ -416,11 +486,13 @@ impl Dashboard {
             return;
         }
         if let Some(draft) = self.draft.take() {
-            let annotation = Annotation {
-                description: description.trim().to_owned(),
-                tags: draft.tags,
-            };
-            if self.library.set_annotation(&draft.project, annotation) {
+            let version = self.version.read(cx).value();
+            if self.library.set_annotation(
+                &draft.project,
+                description.trim().to_owned(),
+                draft.tags,
+                &version,
+            ) {
                 if self.pending_catalog.is_none() {
                     self.queue_save(cx);
                 }
@@ -429,6 +501,89 @@ impl Dashboard {
                 self.info = Some("No annotation changes to save.".into());
             }
             self.finish_edit(cx);
+        }
+    }
+
+    fn can_edit_todos(&self, path: &Path) -> bool {
+        self.allow_save
+            && !self.picking
+            && self.draft.is_none()
+            && self
+                .selected_project()
+                .is_some_and(|project| project.path == path)
+    }
+
+    fn open_todo_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(project) = self.selected_project().map(|project| project.path.clone()) else {
+            return;
+        };
+        if !self.can_edit_todos(&project) || self.todo_draft.is_some() {
+            return;
+        }
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("What needs doing?")
+                .validate(|text, _| text.chars().count() <= TODO_LIMIT)
+        });
+        let events = cx.subscribe_in(&input, window, |this, emitter, event, window, cx| {
+            if matches!(event, InputEvent::PressEnter { .. })
+                && this
+                    .todo_draft
+                    .as_ref()
+                    .is_some_and(|draft| draft.input == *emitter)
+            {
+                this.save_todo(window, cx);
+            }
+        });
+        input.update(cx, |input, cx| input.focus(window, cx));
+        self.todo_draft = Some(TodoDraft {
+            project,
+            input,
+            _events: events,
+        });
+        cx.notify();
+    }
+
+    fn close_todo_draft(&mut self, cx: &mut Context<Self>) {
+        self.todo_draft = None;
+        cx.notify();
+    }
+
+    fn save_todo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(draft) = self.todo_draft.as_ref() else {
+            return;
+        };
+        if !self.can_edit_todos(&draft.project) {
+            return;
+        }
+        let title = draft.input.read(cx).value();
+        if self.library.add_todo(&draft.project, &title) {
+            draft.input.update(cx, |input, cx| {
+                input.set_value("", window, cx);
+                input.focus(window, cx);
+            });
+            self.queue_save(cx);
+            cx.notify();
+        }
+    }
+
+    fn set_todo_completed(
+        &mut self,
+        path: &Path,
+        id: u64,
+        completed: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.can_edit_todos(path) && self.library.set_todo_completed(path, id, completed) {
+            self.queue_save(cx);
+            cx.notify();
+        }
+    }
+
+    fn remove_todo(&mut self, path: &Path, id: u64, cx: &mut Context<Self>) {
+        if self.can_edit_todos(path) && self.library.remove_todo(path, id) {
+            self.queue_save(cx);
+            cx.notify();
         }
     }
 

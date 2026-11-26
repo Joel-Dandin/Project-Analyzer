@@ -307,3 +307,166 @@ fn keeps_independent_git_projects_out_of_conventional_layouts() -> Result<()> {
     assert!(frontend.repository.is_none());
     Ok(())
 }
+
+#[test]
+fn distinguishes_gradle_tooling_back_ends_and_android_projects() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let root = temp.path();
+    put(
+        root,
+        "gradle/build.gradle",
+        "plugins { id 'java' }\next.androidPluginId = 'com.android.application'\n",
+    )?;
+    put(
+        root,
+        "gradle/build.gradle.kts",
+        "plugins {\n    id(\"com.android.application\") version \"8.7.3\" apply false\n}\n",
+    )?;
+    put(
+        root,
+        "spring/build.gradle.kts",
+        "plugins { id(\"org.springframework.boot\") }\n",
+    )?;
+    put(
+        root,
+        "native/settings.gradle.kts",
+        "rootProject.name = \"native\"\ninclude(\":app\")\n",
+    )?;
+    put(
+        root,
+        "native/app/build.gradle.kts",
+        "plugins { alias(libs.plugins.android.application) }\n",
+    )?;
+    put(
+        root,
+        "native/app/src/main/AndroidManifest.xml",
+        r#"<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application /></manifest>"#,
+    )?;
+    put(
+        root,
+        "gradle-android/build.gradle",
+        "apply plugin: 'com.android.library'\n",
+    )?;
+
+    let result = report(root)?;
+    assert_eq!(result.projects.len(), 4);
+    let find = |name: &str| result.projects.iter().find(|p| p.name() == name).unwrap();
+    let tooling = find("gradle");
+    assert_eq!(tooling.kind(), "Gradle");
+    assert!(tooling.is_gradle() && !tooling.is_mobile());
+    assert!(!tooling.is_android());
+    let spring = find("spring");
+    assert_eq!(spring.kind(), "Back end");
+    assert!(spring.is_gradle() && !spring.is_mobile());
+    let native = find("native");
+    assert_eq!(native.kind(), "Android");
+    assert!(native.is_gradle() && native.is_android() && native.is_mobile());
+    assert!(!native.is_ios());
+    assert!(
+        native
+            .components
+            .iter()
+            .any(|component| component.path.ends_with("native/app"))
+    );
+    assert_eq!(native.components.len(), 2);
+    assert_eq!(find("gradle-android").kind(), "Android");
+    Ok(())
+}
+
+#[test]
+fn distinguishes_ios_from_macos_xcode_projects_and_swift_libraries() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let root = temp.path();
+    put(
+        root,
+        "phone/Phone.xcodeproj/project.pbxproj",
+        "// !$*UTF8*$!\n{\n    buildSettings = {\n        SUPPORTED_PLATFORMS = \"iphoneos iphonesimulator\";\n    };\n}\n",
+    )?;
+    put(
+        root,
+        "desktop/Desktop.xcodeproj/project.pbxproj",
+        "{ buildSettings = { SDKROOT = macosx; }; } // iphoneos was not used here\n",
+    )?;
+    put(
+        root,
+        "swift-library/Package.swift",
+        "import PackageDescription\nlet package = Package(name: \"Utility\", platforms: [.iOS(.v15)])\n",
+    )?;
+    put(root, "not-xcode/project.pbxproj", "SDKROOT = iphoneos;\n")?;
+
+    let result = report(root)?;
+    assert_eq!(result.projects.len(), 3);
+    let find = |name: &str| result.projects.iter().find(|p| p.name() == name).unwrap();
+    let ios = find("phone");
+    assert_eq!(ios.kind(), "iOS");
+    assert!(ios.is_ios() && ios.is_mobile());
+    assert!(!ios.is_gradle() && !ios.is_android());
+    assert!(ios.stack.contains("Xcode"));
+    assert_eq!(ios.components[0].path, ios.path);
+    assert!(find("desktop").stack.contains("Xcode"));
+    assert!(!find("desktop").is_mobile());
+    assert!(!find("swift-library").is_mobile());
+    Ok(())
+}
+
+#[test]
+fn groups_flutter_platforms_and_keeps_expo_without_native_files_generic() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let root = temp.path();
+    put(
+        root,
+        "travel/pubspec.yaml",
+        "name: travel\ndependencies:\n  flutter:\n    sdk: flutter\n",
+    )?;
+    put(root, "travel/android/settings.gradle", "include ':app'\n")?;
+    put(
+        root,
+        "travel/android/app/build.gradle",
+        "plugins { id 'com.android.application' }\n",
+    )?;
+    put(
+        root,
+        "travel/ios/Runner.xcodeproj/project.pbxproj",
+        "{ buildSettings = { SDKROOT = iphoneos; }; }\n",
+    )?;
+    put(
+        root,
+        "prototype/package.json",
+        r#"{"name":"prototype","dependencies":{"expo":"53","react":"19"}}"#,
+    )?;
+
+    let result = report(root)?;
+    let [prototype, travel] = result.projects.as_slice() else {
+        anyhow::bail!("expected two projects, found {}", result.projects.len());
+    };
+    assert_eq!(travel.name(), "travel");
+    assert_eq!(travel.kind(), "Android & iOS");
+    assert!(travel.is_gradle() && travel.is_android() && travel.is_ios() && travel.is_mobile());
+    assert_eq!(travel.components.len(), 4);
+    assert_eq!(prototype.name(), "prototype");
+    assert_eq!(prototype.kind(), "Mobile");
+    assert!(prototype.stack.contains("Expo"));
+    assert!(!prototype.is_android() && !prototype.is_ios());
+    Ok(())
+}
+
+#[test]
+fn native_manifest_owners_cannot_escape_the_selected_scan_root() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let root = temp.path();
+    put(root, "app/src/main/AndroidManifest.xml", "<manifest />")?;
+    put(
+        root,
+        "app/Phone.xcodeproj/project.pbxproj",
+        "{ buildSettings = { SDKROOT = iphoneos; }; }\n",
+    )?;
+    for (relative, expected) in [("app/src/main", "Android"), ("app/Phone.xcodeproj", "iOS")] {
+        let report = report(&root.join(relative))?;
+        let [project] = report.projects.as_slice() else {
+            anyhow::bail!("expected one project for {relative}");
+        };
+        assert_eq!(project.path, report.root);
+        assert_eq!(project.kind(), expected);
+    }
+    Ok(())
+}

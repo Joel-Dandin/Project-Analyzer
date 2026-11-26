@@ -6,6 +6,11 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
+pub(super) const ANDROID: &str = "Android";
+pub(super) const IOS: &str = "iOS";
+pub(super) const GRADLE: &str = "Gradle";
+pub(super) const GRADLE_KOTLIN: &str = "Gradle (Kotlin DSL)";
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
@@ -84,17 +89,41 @@ impl Project {
             .to_string_lossy()
     }
 
+    pub fn is_gradle(&self) -> bool {
+        self.stack.contains(GRADLE) || self.stack.contains(GRADLE_KOTLIN)
+    }
+
+    pub fn is_mobile(&self) -> bool {
+        self.roles.contains(&Role::Mobile)
+    }
+
+    pub fn is_android(&self) -> bool {
+        self.stack.contains(ANDROID)
+    }
+
+    pub fn is_ios(&self) -> bool {
+        self.stack.contains(IOS)
+    }
+
     pub fn kind(&self) -> &'static str {
-        if self.roles.contains(&Role::Frontend) && self.roles.contains(&Role::Backend) {
+        match (self.is_android(), self.is_ios()) {
+            (true, true) => return "Android & iOS",
+            (true, false) => return ANDROID,
+            (false, true) => return IOS,
+            (false, false) => {}
+        }
+        if self.is_mobile() {
+            "Mobile"
+        } else if self.roles.contains(&Role::Frontend) && self.roles.contains(&Role::Backend) {
             "Full stack"
         } else if self.roles.contains(&Role::Desktop) {
             "Desktop"
-        } else if self.roles.contains(&Role::Mobile) {
-            "Mobile"
         } else if self.roles.contains(&Role::Backend) {
             "Back end"
         } else if self.roles.contains(&Role::Frontend) {
             "Front end"
+        } else if self.is_gradle() {
+            GRADLE
         } else {
             "General / tooling"
         }

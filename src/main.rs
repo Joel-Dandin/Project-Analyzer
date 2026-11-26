@@ -1,5 +1,6 @@
 //! GPUI application entry point.
 
+mod assets;
 mod ui;
 
 use gpui::{
@@ -11,7 +12,8 @@ use ui::Dashboard;
 fn main() {
     // Measure time to GPUI's first frame callback, excluding compilation.
     let started = std::time::Instant::now();
-    Application::new().run(move |cx| {
+    let app = Application::new().with_assets(assets::Assets);
+    app.run(move |cx| {
         gpui_component::init(cx);
         Theme::change(ThemeMode::Dark, None, cx);
         let bounds = Bounds::centered(None, size(px(1200.), px(780.)), cx);

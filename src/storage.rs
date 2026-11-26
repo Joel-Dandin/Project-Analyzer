@@ -10,13 +10,16 @@ use std::{
 };
 
 use anyhow::{Context as _, Result, ensure};
+use chrono::{DateTime, Utc};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
 
 use crate::scanner::ScanReport;
 
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 2;
+pub const VERSION_LIMIT: usize = 64;
+pub const TODO_LIMIT: usize = 240;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -59,6 +62,37 @@ impl Tag {
 pub struct Annotation {
     pub description: String,
     pub tags: BTreeSet<Tag>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub version: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    status_history: Vec<StatusChange>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    todos: Vec<Todo>,
+}
+
+impl Annotation {
+    /// In order of saving, from oldest to newest.
+    pub fn status_history(&self) -> &[StatusChange] {
+        &self.status_history
+    }
+
+    pub fn todos(&self) -> &[Todo] {
+        &self.todos
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct StatusChange {
+    pub at: DateTime<Utc>,
+    pub previous: BTreeSet<Tag>,
+    pub current: BTreeSet<Tag>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Todo {
+    pub id: u64,
+    pub title: String,
+    pub completed: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -91,18 +125,108 @@ impl Library {
         self.annotations.get(&path_key(project))
     }
 
-    /// Returns whether anything changed. Empty annotations do not occupy a record.
-    pub fn set_annotation(&mut self, project: &Path, annotation: Annotation) -> bool {
+    /// Saves the editable fields without replacing the project's history or to-dos.
+    /// Returns whether anything changed. Unchanged status sets are not logged.
+    pub fn set_annotation(
+        &mut self,
+        project: &Path,
+        description: String,
+        tags: BTreeSet<Tag>,
+        version: &str,
+    ) -> bool {
         let key = path_key(project);
-        if annotation == Annotation::default() {
-            return self.annotations.contains_key(&key)
-                && Arc::make_mut(&mut self.annotations).remove(&key).is_some();
-        }
-        if self.annotations.get(&key) == Some(&annotation) {
+        let version: String = version.trim().chars().take(VERSION_LIMIT).collect();
+        let unchanged = self.annotations.get(&key).map_or_else(
+            || description.is_empty() && tags.is_empty() && version.is_empty(),
+            |entry| {
+                entry.description == description && entry.tags == tags && entry.version == version
+            },
+        );
+        if unchanged {
             return false;
         }
-        Arc::make_mut(&mut self.annotations).insert(key, annotation);
+        let annotations = Arc::make_mut(&mut self.annotations);
+        let entry = annotations.entry(key.clone()).or_default();
+        if entry.tags != tags {
+            entry.status_history.push(StatusChange {
+                at: Utc::now(),
+                previous: std::mem::replace(&mut entry.tags, tags),
+                current: entry.tags.clone(),
+            });
+        }
+        entry.description = description;
+        entry.version = version;
+        if *entry == Annotation::default() {
+            annotations.remove(&key);
+        }
         true
+    }
+
+    pub fn add_todo(&mut self, project: &Path, title: &str) -> bool {
+        let title: String = title.trim().chars().take(TODO_LIMIT).collect();
+        if title.is_empty() {
+            return false;
+        }
+        let todos = &mut Arc::make_mut(&mut self.annotations)
+            .entry(path_key(project))
+            .or_default()
+            .todos;
+        let Some(id) = todos
+            .iter()
+            .map(|todo| todo.id)
+            .max()
+            .unwrap_or(0)
+            .checked_add(1)
+        else {
+            return false;
+        };
+        todos.push(Todo {
+            id,
+            title,
+            completed: false,
+        });
+        true
+    }
+
+    pub fn set_todo_completed(&mut self, project: &Path, id: u64, completed: bool) -> bool {
+        self.update_todo(project, id, |todos, index| {
+            let todo = &mut todos[index];
+            if todo.completed == completed {
+                return false;
+            }
+            todo.completed = completed;
+            true
+        })
+    }
+
+    pub fn remove_todo(&mut self, project: &Path, id: u64) -> bool {
+        self.update_todo(project, id, |todos, index| {
+            todos.remove(index);
+            true
+        })
+    }
+
+    fn update_todo(
+        &mut self,
+        project: &Path,
+        id: u64,
+        update: impl FnOnce(&mut Vec<Todo>, usize) -> bool,
+    ) -> bool {
+        let key = path_key(project);
+        let Some(index) = self
+            .annotations
+            .get(&key)
+            .and_then(|entry| entry.todos.iter().position(|todo| todo.id == id))
+        else {
+            return false;
+        };
+        let annotations = Arc::make_mut(&mut self.annotations);
+        let entry = annotations.get_mut(&key).expect("project has the to-do");
+        let changed = update(&mut entry.todos, index);
+        if *entry == Annotation::default() {
+            annotations.remove(&key);
+        }
+        changed
     }
 
     pub fn is_favorite(&self, project: &Path) -> bool {
@@ -177,13 +301,16 @@ impl Store {
             Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Library::default()),
             Err(err) => return Err(err).context("Could not open dashboard data"),
         };
-        let data: Library = serde_json::from_reader(BufReader::new(file))
+        let mut data: Library = serde_json::from_reader(BufReader::new(file))
             .context("Could not parse dashboard.json")?;
         ensure!(
-            data.schema_version == SCHEMA_VERSION,
+            (1..=SCHEMA_VERSION).contains(&data.schema_version),
             "Dashboard data has unsupported schema version {}",
             data.schema_version
         );
+        // v1 lacks versions, status history, and to-dos. Serde supplies empty defaults;
+        // existing tags are not dated or assigned a made-up history entry.
+        data.schema_version = SCHEMA_VERSION;
         Ok(data)
     }
 
@@ -225,12 +352,17 @@ mod tests {
         let project = root.join("sample");
         let mut data = store.load()?;
         data.last_root = Some(root.clone());
-        let annotation = Annotation {
-            description: "Demo API".to_owned(),
-            tags: BTreeSet::from([Tag::Developing, Tag::OnHold]),
-        };
-        assert!(data.set_annotation(&project, annotation.clone()));
-        assert!(!data.set_annotation(&project, annotation.clone()));
+        let tags = BTreeSet::from([Tag::Developing, Tag::OnHold]);
+        assert!(data.set_annotation(&project, "Demo API".into(), tags.clone(), " 1.2.0 "));
+        assert!(!data.set_annotation(&project, "Demo API".into(), tags.clone(), "1.2.0"));
+        assert!(data.add_todo(&project, "Write docs"));
+        let task_id = data.annotation(&project).unwrap().todos()[0].id;
+        assert!(data.set_todo_completed(&project, task_id, true));
+        let annotation = data.annotation(&project).unwrap().clone();
+        assert_eq!(annotation.version, "1.2.0");
+        assert_eq!(annotation.status_history().len(), 1);
+        assert!(annotation.status_history()[0].previous.is_empty());
+        assert_eq!(annotation.status_history()[0].current, tags);
         let other_project = root.join("no-notes");
         assert!(data.set_favorite(&project, true));
         assert!(!data.set_favorite(&project, true));
@@ -261,10 +393,16 @@ mod tests {
         assert!(loaded.is_favorite(&other_project));
         assert_eq!(loaded.annotation(&project), Some(&annotation));
         let mut cleared = loaded;
-        assert!(cleared.set_annotation(&project, Annotation::default()));
+        assert!(cleared.set_annotation(&project, String::new(), BTreeSet::new(), ""));
         store.save(&cleared)?;
         let cleared = store.load()?;
-        assert!(cleared.annotation(&project).is_none());
+        let entry = cleared.annotation(&project).unwrap();
+        assert!(entry.version.is_empty());
+        assert!(entry.tags.is_empty());
+        assert_eq!(entry.status_history().len(), 2);
+        assert_eq!(entry.status_history()[1].previous, tags);
+        assert!(entry.status_history()[1].current.is_empty());
+        assert_eq!(entry.todos(), annotation.todos());
         assert!(cleared.is_favorite(&other_project));
         assert!(!project.exists() && !other_project.exists());
         Ok(())
@@ -280,14 +418,71 @@ mod tests {
             store.path(),
             r#"{"schema_version":1,"annotations":{"/project":{"description":"Existing note","tags":["planned"]}}}"#,
         )?;
-        let data = store.load()?;
+        let mut data = store.load()?;
         let project = Path::new("/project");
         assert!(!data.is_favorite(project));
-        assert_eq!(
-            data.annotation(project).unwrap().description,
-            "Existing note"
+        let annotation = data.annotation(project).unwrap();
+        assert_eq!(annotation.description, "Existing note");
+        assert_eq!(annotation.tags, BTreeSet::from([Tag::Planned]));
+        assert!(annotation.version.is_empty());
+        assert!(annotation.status_history().is_empty());
+        assert!(annotation.todos().is_empty());
+        assert!(data.set_annotation(
+            project,
+            "Edited note".into(),
+            BTreeSet::from([Tag::Planned]),
+            "v1"
+        ));
+        assert!(
+            data.annotation(project)
+                .unwrap()
+                .status_history()
+                .is_empty()
         );
+        assert!(data.set_annotation(
+            project,
+            "Edited note".into(),
+            BTreeSet::from([Tag::Developing]),
+            "v1"
+        ));
+        let event = &data.annotation(project).unwrap().status_history()[0];
+        assert_eq!(event.previous, BTreeSet::from([Tag::Planned]));
+        assert_eq!(event.current, BTreeSet::from([Tag::Developing]));
+        store.save(&data)?;
+        assert_eq!(store.load()?.schema_version, SCHEMA_VERSION);
         Ok(())
+    }
+
+    #[test]
+    fn manages_todos_by_project_without_creating_status_events() {
+        let first = Path::new("/first");
+        let second = Path::new("/second");
+        let mut library = Library::default();
+        assert!(!library.add_todo(first, " \t "));
+        assert!(library.annotation(first).is_none());
+        assert!(library.add_todo(first, "  Ship it  "));
+        assert!(library.add_todo(first, "Ship it"));
+        assert!(library.add_todo(second, "Another project"));
+        let tasks = library.annotation(first).unwrap().todos();
+        let (a, b) = (tasks[0].id, tasks[1].id);
+        assert_ne!(a, b);
+        assert_eq!(tasks[0].title, "Ship it");
+        assert!(!library.set_todo_completed(first, a, false));
+        assert!(library.set_todo_completed(first, a, true));
+        assert!(!library.annotation(second).unwrap().todos()[0].completed);
+        assert!(!library.remove_todo(second, b));
+        assert!(library.remove_todo(first, b));
+        assert!(library.set_todo_completed(first, a, false));
+        assert!(!library.annotation(first).unwrap().todos()[0].completed);
+        assert!(
+            library
+                .annotation(first)
+                .unwrap()
+                .status_history()
+                .is_empty()
+        );
+        assert!(library.remove_todo(first, a));
+        assert!(library.annotation(first).is_none());
     }
 
     #[test]

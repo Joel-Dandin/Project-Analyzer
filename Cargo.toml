@@ -16,6 +16,7 @@ required-features = ["gui"]
 
 [dependencies]
 anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["now", "serde"] }
 directories = "6"
 dunce = "1"
 globset = "0.4"
