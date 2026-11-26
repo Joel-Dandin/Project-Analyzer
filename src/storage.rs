@@ -414,6 +414,12 @@ pub struct Store {
 
 impl Store {
     pub fn for_user() -> Result<Self> {
+        // Lets tests and portable installs keep dashboard.json away from the user profile.
+        if let Some(dir) = std::env::var_os("PROJECT_ANALYSER_DATA_DIR") {
+            return Ok(Self {
+                path: PathBuf::from(dir).join("dashboard.json"),
+            });
+        }
         let dirs = ProjectDirs::from("org", "Workspace Tools", "Project Analyser")
             .context("No user application data directory is available")?;
         Ok(Self {
