@@ -359,9 +359,7 @@ impl Library {
     }
 
     pub fn folders(&self) -> &[PathBuf] {
-        self.folders
-            .as_deref()
-            .unwrap_or_else(|| self.last_root.as_slice())
+        self.folders.as_deref().unwrap_or(self.last_root.as_slice())
     }
 
     pub fn set_folders(&mut self, folders: Vec<PathBuf>) {
