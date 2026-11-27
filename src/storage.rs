@@ -17,7 +17,12 @@ use tempfile::NamedTempFile;
 
 use crate::scanner::ScanReport;
 
-const SCHEMA_VERSION: u32 = 3;
+mod ideas;
+
+pub use ideas::{IDEA_TITLE_LIMIT, Idea, IdeaDraft, IdeaStatus, MARKDOWN_LIMIT};
+use ideas::{IdeaBoard, truncate_markdown};
+
+const SCHEMA_VERSION: u32 = 4;
 pub const VERSION_LIMIT: usize = 64;
 pub const TODO_LIMIT: usize = 240;
 
@@ -129,6 +134,10 @@ pub struct Library {
     annotations: Arc<BTreeMap<String, Annotation>>,
     #[serde(default)]
     favorites: Arc<BTreeSet<String>>,
+    #[serde(default, skip_serializing_if = "arc_map_empty")]
+    scratchpads: Arc<BTreeMap<String, String>>,
+    #[serde(default)]
+    ideas: Arc<IdeaBoard>,
     // None means the dashboard predates multiple scan folders.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     folders: Option<Vec<PathBuf>>,
@@ -146,6 +155,8 @@ impl Default for Library {
             snapshot: None,
             annotations: Arc::new(BTreeMap::new()),
             favorites: Arc::new(BTreeSet::new()),
+            scratchpads: Arc::default(),
+            ideas: Arc::default(),
             folders: None,
             scan_history: Vec::new(),
             scan_pending: false,
@@ -153,7 +164,50 @@ impl Default for Library {
     }
 }
 
+fn arc_map_empty(map: &BTreeMap<String, String>) -> bool {
+    map.is_empty()
+}
+
 impl Library {
+    pub fn scratchpad(&self, project: &Path) -> &str {
+        self.scratchpads
+            .get(&path_key(project))
+            .map_or("", String::as_str)
+    }
+
+    /// Project scratchpads are independent of notes, tasks, and the current scan.
+    pub fn set_scratchpad(&mut self, project: &Path, mut markdown: String) -> bool {
+        truncate_markdown(&mut markdown);
+        let key = path_key(project);
+        if self.scratchpads.get(&key).map_or("", String::as_str) == markdown {
+            return false;
+        }
+        let scratchpads = Arc::make_mut(&mut self.scratchpads);
+        if markdown.is_empty() {
+            scratchpads.remove(&key);
+        } else {
+            scratchpads.insert(key, markdown);
+        }
+        true
+    }
+
+    pub fn ideas(&self) -> &[Idea] {
+        self.ideas.entries()
+    }
+
+    pub fn idea(&self, id: u32) -> Option<&Idea> {
+        self.ideas().iter().find(|idea| idea.id == id)
+    }
+
+    /// Returns the idea's ID and whether it changed, or None for an invalid draft or ID.
+    pub fn save_idea(&mut self, id: Option<u32>, draft: IdeaDraft) -> Option<(u32, bool)> {
+        Arc::make_mut(&mut self.ideas).save(id, draft)
+    }
+
+    pub fn remove_idea(&mut self, id: u32) -> bool {
+        Arc::make_mut(&mut self.ideas).remove(id)
+    }
+
     pub fn annotation(&self, project: &Path) -> Option<&Annotation> {
         self.annotations.get(&path_key(project))
     }
@@ -475,6 +529,78 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn migrates_v3_and_keeps_ideas_independent_of_projects_and_todos() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let store = Store {
+            path: dir.path().join("dashboard.json"),
+        };
+        let project = dir.path().join("workspace").join("sample");
+        let other = project.with_file_name("other");
+        fs::write(
+            store.path(),
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 3,
+                "annotations": { (path_key(&project)): { "notes": "Notes stay separate" } }
+            }))?,
+        )?;
+        let mut data = store.load()?;
+        assert_eq!(data.schema_version, 4);
+        assert!(data.ideas().is_empty());
+        assert_eq!(data.scratchpad(&project), "");
+        assert!(data.add_todo(&project, "Do this"));
+        assert!(data.set_scratchpad(&project, "# Scratchpad\n\n    indented  \n".into()));
+        assert!(data.set_scratchpad(&other, "Separate board".into()));
+        let mut draft = IdeaDraft {
+            title: "  A new project  ".into(),
+            markdown: "## Sketch\n- draft".into(),
+            status: IdeaStatus::Raw,
+            tags: BTreeSet::from([" prototype ".into()]),
+            project_id: None,
+        };
+        let (id, true) = data.save_idea(None, draft.clone()).unwrap() else {
+            panic!("not created")
+        };
+        let created = data.idea(id).unwrap().created_at;
+        assert_eq!(data.save_idea(Some(id), draft.clone()), Some((id, false)));
+        draft.status = IdeaStatus::Promoted;
+        assert_eq!(data.save_idea(Some(id), draft.clone()), None);
+        draft.project_id = Some(path_key(&project));
+        assert_eq!(data.save_idea(Some(id), draft.clone()), Some((id, true)));
+        data.set_folders(vec![]);
+        store.save(&data)?;
+        let mut data = store.load()?;
+        let idea = data.idea(id).unwrap();
+        assert_eq!(idea.draft.title, "A new project");
+        assert_eq!(idea.draft.markdown, draft.markdown);
+        assert_eq!(idea.draft.project_id, draft.project_id);
+        assert_eq!(idea.draft.tags, BTreeSet::from(["prototype".into()]));
+        assert_eq!(idea.created_at, created);
+        assert!(idea.updated_at >= created);
+        assert_eq!(
+            data.scratchpad(&project),
+            "# Scratchpad\n\n    indented  \n"
+        );
+        assert_eq!(data.scratchpad(&other), "Separate board");
+        assert!(data.set_scratchpad(&project, String::new()));
+        assert!(!data.set_scratchpad(&project, String::new()));
+        assert_eq!(
+            data.annotation(&project).unwrap().notes,
+            "Notes stay separate"
+        );
+        assert_eq!(data.annotation(&project).unwrap().todos().len(), 1);
+        assert!(data.remove_idea(id));
+        assert!(!data.remove_idea(id));
+        store.save(&data)?;
+        let mut data = store.load()?;
+        assert!(data.ideas().is_empty());
+        assert_eq!(data.save_idea(None, draft), Some((id + 1, true)));
+        let long = "界".repeat(MARKDOWN_LIMIT + 1);
+        assert!(data.set_scratchpad(&project, long));
+        assert_eq!(data.scratchpad(&project).chars().count(), MARKDOWN_LIMIT);
+        Ok(())
+    }
 
     #[test]
     fn migrates_v2_and_persists_new_annotations_and_scan_history() -> Result<()> {
