@@ -1,0 +1,48 @@
+/* The global Idea board follows Ideas3's list/editor split. */
+.idea-board { display: grid; grid-template-columns: minmax(210px, 31%) minmax(0, 1fr); flex: 1; min-height: 0; }
+.idea-index { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--bd); }
+.idea-search { padding: 12px 14px 8px; }
+.idea-filters { display: flex; gap: 4px; flex-wrap: wrap; padding: 0 12px 8px; border-bottom: 1px solid var(--bd); }
+.idea-filters .btn { font-size: 11px; height: 24px; padding-inline: 6px; }
+.idea-results, .idea-detail { overflow: auto; scrollbar-width: thin; scrollbar-color: #3a3c41 transparent; }
+.idea-results { flex: 1; }
+.idea-row { width: 100%; display: block; padding: 10px 14px; border: 0; border-bottom: 1px solid var(--bd); background: transparent; cursor: pointer; text-align: left; }
+.idea-row:hover, .idea-row[aria-current="true"] { background: var(--hov); }
+.idea-row[aria-current="true"] { box-shadow: inset 2px 0 var(--ac); }
+.idea-row b, .idea-row .t3 { display: block; }
+.idea-row .t3 { margin: 4px 0 6px; }
+.idea-chips { flex-wrap: wrap; gap: 4px; }
+.idea-chips .ch { max-width: 150px; }
+.idea-detail { padding: 16px 20px; }
+.idea-detail > form { display: grid; gap: 12px; }
+.idea-fields { display: grid; grid-template-columns: minmax(108px, 1fr) minmax(0, 3fr); gap: 10px; }
+.idea-field { display: grid; gap: 4px; color: var(--t2); font-size: 12px; min-width: 0; }
+.idea-field .in { min-width: 0; color: var(--t1); color-scheme: dark; }
+.idea-title .in { font-size: 16px; height: 34px; font-weight: 600; }
+.idea-linked .in { flex: 1; }
+.idea-actions { flex-wrap: wrap; }
+.idea-actions .t3, .markdown-toolbar .t3 { font-size: 12px; }
+.markdown-toolbar { margin-bottom: 6px; gap: 4px; flex-wrap: wrap; }
+.markdown-toolbar .btn { height: 24px; padding-inline: 7px; }
+.markdown-panes { display: grid; gap: 8px; }
+.markdown-panes.split { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.markdown-panes textarea.in { min-width: 0; resize: vertical; line-height: 1.5; min-height: 145px; }
+.idea-detail .markdown-panes textarea, .idea-detail .markdown-preview { min-height: 255px; }
+.markdown-preview { min-height: 145px; min-width: 0; padding: 8px 10px; border: 1px solid var(--bd); border-radius: 6px; background: var(--elev); overflow-wrap: anywhere; line-height: 1.5; }
+.markdown-preview > :first-child { margin-top: 0; }
+.markdown-preview > :last-child { margin-bottom: 0; }
+.markdown-preview :is(h1, h2, h3) { margin: .65em 0 .35em; line-height: 1.25; }
+.markdown-preview :is(ul, ol) { padding-left: 1.6em; }
+.markdown-preview pre { overflow: auto; background: var(--bg); padding: 8px; border-radius: 4px; }
+.markdown-preview blockquote { margin-inline: 0; padding-left: 8px; border-left: 2px solid var(--ac); color: var(--t2); }
+.markdown-preview table { border-collapse: collapse; }
+.markdown-preview :is(th, td) { padding: 2px 5px; border: 1px solid var(--bd); }
+.scratchpad-actions { justify-content: flex-end; margin-top: 6px; }
+@media (max-width: 1040px) {
+  .details .markdown-panes.split { grid-template-columns: 1fr; }
+  .idea-detail { padding-inline: 12px; }
+}
+@media (max-width: 900px) {
+  .idea-board { grid-template-columns: minmax(170px, 33%) minmax(0, 1fr); }
+  .markdown-panes.split { grid-template-columns: 1fr; }
+}

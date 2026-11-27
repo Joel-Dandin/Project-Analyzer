@@ -7,12 +7,31 @@ use std::{
 use anyhow::{Context, Result};
 use project_analyser::{
     scanner::{self, Project, ProjectKind, ScanControl, ScanReport},
-    storage::{Library, Store, path_key},
+    storage::{IDEA_TITLE_LIMIT, Library, MARKDOWN_LIMIT, Store, path_key},
 };
 use serde_json::{Value, json};
 
 pub fn contains(roots: &[PathBuf], path: &Path) -> bool {
     roots.iter().any(|root| path.starts_with(root))
+}
+
+pub(super) fn project<T>(
+    library: &Library,
+    id: &str,
+    with_project: impl FnOnce(&Project) -> T,
+) -> Option<T> {
+    let snapshot = library.snapshot()?;
+    snapshot
+        .projects
+        .iter()
+        .find(|project| {
+            project
+                .path
+                .to_str()
+                .map_or_else(|| path_key(&project.path) == id, |path| path == id)
+                && contains(library.folders(), &project.path)
+        })
+        .map(with_project)
 }
 
 pub fn scan(
@@ -83,6 +102,7 @@ fn project_view(project: &Project, library: &Library) -> Value {
         "repository": project.repository, "starred": library.is_favorite(path),
         "summary": annotation.map(|a| a.description.as_str()).unwrap_or_default(),
         "notes": annotation.map(|a| a.notes.as_str()).unwrap_or_default(),
+        "has_scratchpad": !library.scratchpad(path).is_empty(),
         "tags": annotation.map(|a| &a.custom_tags),
         "statuses": annotation.map(|a| &a.tags),
         "versions": annotation.map(|a| a.versions().collect::<Vec<_>>()),
@@ -120,7 +140,20 @@ pub fn state(
             })
         })
         .collect::<Vec<_>>();
+    let ideas = library
+        .ideas()
+        .iter()
+        .map(|idea| {
+            json!({
+                "id": idea.id, "title": idea.draft.title, "status": idea.draft.status,
+                "tags": idea.draft.tags, "project_id": idea.draft.project_id,
+                "updated_at": idea.updated_at,
+                "excerpt": idea.draft.markdown.trim_start().chars().take(140).collect::<String>(),
+            })
+        })
+        .collect::<Vec<_>>();
     json!({
+        "ideas": ideas, "markdown_limit": MARKDOWN_LIMIT, "idea_title_limit": IDEA_TITLE_LIMIT,
         "projects": projects, "history": history, "loading": loading,
         "editable": store.is_some(), "data_path": store.map(|s| s.path().to_string_lossy()),
         "cached": snapshot.is_some() && !folders.is_empty(),

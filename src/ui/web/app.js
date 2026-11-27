@@ -42,7 +42,8 @@ function renderSidebar() {
   const all = page === "projects";
   setContent($("workspace-nav"), nav("All projects", "page", "projects", projects.length, all && !starred && !kind)
     + nav("Starred", "page", "starred", metrics.starred, all && starred)
-    + nav("Statistics", "page", "statistics", null, !all));
+    + nav("Idea board", "page", "ideas", workspace.ideas?.length ?? 0, page === "ideas")
+    + nav("Statistics", "page", "statistics", null, page === "statistics"));
   setContent($("folders"), folders.map(folder => `<div class="folder row">
     <span class="ellipsis" title="${text(folder.path)}">${text(shortPath(folder.path, home, windows))}</span>
     <button class="x" data-action="remove-folder" data-value="${text(attrId(folder.id))}" aria-label="Remove ${text(folder.path)}"${disabled(busy || loading)}>×</button>
@@ -61,12 +62,15 @@ function renderSidebar() {
 function renderHeader(count) {
   const {loading, progress, history, cached, folders, notice, storage_error} = workspace;
   const stats = page === "statistics";
-  $("page-heading").textContent = stats ? "Statistics" : starred ? "Starred" : "All projects";
+  const ideas = page === "ideas";
+  $("page-heading").textContent = stats ? "Statistics" : ideas ? "Idea board" : starred ? "Starred" : "All projects";
   $("page-count").textContent = count;
-  $("header-action").textContent = stats ? "Export" : "Rescan";
-  $("header-action").disabled = loading || (!stats && (Boolean(progress) || !folders.length));
-  $("toolbar").hidden = stats;
-  $("project-view").hidden = stats;
+  $("header-action").textContent = stats ? "Export" : ideas ? "+ New idea" : "Rescan";
+  $("header-action").classList.toggle("pri", ideas);
+  $("header-action").disabled = loading || (ideas ? !workspace.editable : !stats && (Boolean(progress) || !folders.length));
+  $("toolbar").hidden = page !== "projects";
+  $("project-view").hidden = page !== "projects";
+  $("idea-board").hidden = !ideas;
   $("statistics").hidden = !stats;
   $("progress").hidden = !progress && !loading;
   setContent($("progress"), progress ? `<i class="dot"></i>${progress.cancelled ? "Cancelling scan…" : `Scanning · ${progress.done} of ${progress.total} folders`}` : "Loading workspace…");
@@ -129,6 +133,7 @@ function renderDetails(project) {
   $("details").hidden = !showDetails;
   $("detail-empty").hidden = Boolean(project);
   $("editor").hidden = !project;
+  ideaBoards.showScratchpad(showDetails ? project : null);
   if (!project) { editorId = null; return; }
   const sameProject = editorId === project.id;
   if (!sameProject) {
@@ -173,13 +178,20 @@ function renderDetails(project) {
 }
 
 function render() {
-  const projects = filtered(workspace.projects);
   renderSidebar();
-  renderHeader(page === "statistics" ? workspace.projects.length : projects.length);
+  if (page !== "projects") ideaBoards.showScratchpad(null);
+  if (page === "ideas") {
+    renderHeader(workspace.ideas?.length ?? 0);
+    ideaBoards.render();
+    return;
+  }
   if (page === "statistics") {
+    renderHeader(workspace.projects.length);
     setContent($("statistics"), renderStatistics(metrics));
     return;
   }
+  const projects = filtered(workspace.projects);
+  renderHeader(projects.length);
   const project = projects.find(item => item.id === selected) ?? [...projects].sort(orderProjects)[0];
   selected = project?.id ?? null;
   renderList(projects);
@@ -194,6 +206,17 @@ window.receive = next => {
   metrics = summarizeWorkspace(workspace);
   render();
 };
+
+function openLinkedProject(id) {
+  if (!workspace.projects.some(project => project.id === id)) return;
+  page = "projects";
+  kind = query = "";
+  starred = false;
+  showDetails = true;
+  selected = id;
+  $("version-search").value = "";
+  render();
+}
 
 function edit(field, args, id = editorId) {
   if (workspace.editable && id != null) post("edit", {id, field, ...args});
@@ -260,11 +283,12 @@ document.addEventListener("click", event => {
     case "choose": case "retry_save": post(action); return;
     case "header":
       if (page === "statistics") post("export", {report: JSON.stringify(metrics, null, 2)});
+      else if (page === "ideas") ideaBoards.createIdea();
       else post("start");
       return;
     case "remove-folder": post("remove_folder", {id: decodeURIComponent(value)}); return;
     case "page":
-      page = value === "statistics" ? value : "projects";
+      page = value === "statistics" || value === "ideas" ? value : "projects";
       if (page === "projects") { kind = ""; starred = value === "starred"; }
       break;
     case "kind": page = "projects"; kind = kind === value ? "" : value; break;
@@ -319,5 +343,6 @@ document.addEventListener("keydown", event => {
 });
 window.addEventListener("resize", () => closeMenu());
 
+ideaBoards.init();
 render();
 post("ready");

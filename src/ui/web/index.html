@@ -7,8 +7,10 @@
   <title>Project Analyzer</title>
   <link rel="stylesheet" href="mockup.css">
   <link rel="stylesheet" href="layout.css">
+  <link rel="stylesheet" href="ideas.css">
   <script src="catalog.js" defer></script>
   <script src="statistics.js" defer></script>
+  <script src="ideas.js" defer></script>
   <script src="app.js" defer></script>
 </head>
 <body>
@@ -93,6 +95,14 @@
               <div><label class="lb" for="summary">Summary</label><textarea class="in" id="summary" rows="4" maxlength="8000"></textarea></div>
               <div><label class="lb" for="notes">Notes</label><textarea class="in" id="notes" rows="4" maxlength="8000"></textarea></div>
             </div>
+            <section id="scratchpad" aria-labelledby="scratch-heading">
+              <h3 class="lb" id="scratch-heading">Idea board · Project scratchpad</h3>
+              <div id="scratch-markdown"></div>
+              <div class="row scratchpad-actions">
+                <span class="t3" id="scratch-state" role="status"></span>
+                <button class="btn compact" id="scratch-save" type="button" disabled>Save scratchpad</button>
+              </div>
+            </section>
             <h3 class="lb row"><span>To-dos</span><span class="spacer"></span><span id="todo-count"></span></h3>
             <div id="todos"></div>
             <form class="add-task" data-add="add_todo"><input class="in" aria-label="New task" placeholder="Add a task…" maxlength="240"></form>
@@ -102,6 +112,37 @@
           </div>
         </section>
       </div>
+      <section class="idea-board" id="idea-board" aria-label="Project ideas" hidden>
+        <div class="idea-index">
+          <div class="idea-search"><input id="idea-search" class="in" type="search" aria-label="Search idea titles, tags, and snippets" placeholder="Search ideas…"></div>
+          <div class="idea-filters" id="idea-filters" role="group" aria-label="Filter by idea status"></div>
+          <div class="idea-results" id="idea-results" aria-label="Idea results"></div>
+        </div>
+        <section class="idea-detail" aria-label="Idea editor">
+          <div class="t3" id="idea-empty">Select an idea or create a new one.</div>
+          <form id="idea-form" hidden>
+            <label class="idea-field idea-title">Title<input class="in" id="idea-title" placeholder="Give the idea a title…" required maxlength="120"></label>
+            <div class="idea-fields">
+              <label class="idea-field">Status<select class="in" id="idea-status">
+                <option value="raw">Raw</option><option value="exploring">Exploring</option>
+                <option value="parked">Parked</option><option value="promoted">Promoted</option>
+              </select></label>
+              <label class="idea-field">Tags<input class="in" id="idea-tags" placeholder="Comma-separated tags" maxlength="1600"></label>
+            </div>
+            <div id="idea-linked" hidden>
+              <label class="idea-field" for="idea-project">Linked project</label>
+              <div class="row idea-linked"><select class="in" id="idea-project"></select><button class="btn" id="idea-view-project" type="button">View project</button></div>
+            </div>
+            <div id="idea-markdown"></div>
+            <div class="row idea-actions">
+              <button class="btn" id="idea-delete" type="button">Delete</button>
+              <button class="btn" id="idea-discard" type="button">Discard draft</button>
+              <span class="spacer"></span><span class="t3" id="idea-state" role="status"></span>
+              <button class="btn pri" id="idea-save" type="submit">Save idea</button>
+            </div>
+          </form>
+        </section>
+      </section>
       <section class="stats" id="statistics" aria-label="Workspace statistics" hidden></section>
     </main>
   </div>
