@@ -18,15 +18,23 @@ pub enum Role {
     Backend,
     Desktop,
     Mobile,
+    Library,
+    Cli,
+    Data,
+    Infrastructure,
 }
 
 impl Role {
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Frontend => "Front end",
-            Self::Backend => "Back end",
-            Self::Desktop => "Desktop",
+            Self::Frontend => ProjectKind::Frontend.label(),
+            Self::Backend => ProjectKind::Backend.label(),
+            Self::Desktop => ProjectKind::Desktop.label(),
             Self::Mobile => "Mobile",
+            Self::Library => ProjectKind::Library.label(),
+            Self::Cli => ProjectKind::Cli.label(),
+            Self::Data => ProjectKind::Data.label(),
+            Self::Infrastructure => ProjectKind::Infrastructure.label(),
         }
     }
 }
@@ -81,35 +89,56 @@ pub struct Project {
     pub repository: Option<Repository>,
 }
 
-/// The primary type shown on a project card and counted in workspace statistics.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ProjectKind {
-    Frontend,
-    Backend,
-    FullStack,
-    Desktop,
-    Android,
-    Ios,
-    AndroidAndIos,
-    Mobile,
-    Gradle,
-    Tooling,
+macro_rules! project_kinds {
+    ($($group:literal { $($kind:ident: $key:literal => $label:expr),+ $(,)? })+) => {
+        /// Mutually exclusive primary types, in display order.
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        pub enum ProjectKind { $($($kind,)+)+ }
+
+        impl ProjectKind {
+            pub const ALL: &'static [Self] = &[$($(Self::$kind,)+)+];
+
+            pub const fn key(self) -> &'static str {
+                match self { $($(Self::$kind => $key,)+)+ }
+            }
+
+            pub const fn label(self) -> &'static str {
+                match self { $($(Self::$kind => $label,)+)+ }
+            }
+
+            pub const fn group(self) -> &'static str {
+                match self { $($(Self::$kind)|+ => $group,)+ }
+            }
+        }
+    };
 }
 
-impl ProjectKind {
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Frontend => "Front end",
-            Self::Backend => "Back end",
-            Self::FullStack => "Full stack",
-            Self::Desktop => "Desktop",
-            Self::Android => ANDROID,
-            Self::Ios => IOS,
-            Self::AndroidAndIos => "Android & iOS",
-            Self::Mobile => "Mobile",
-            Self::Gradle => GRADLE,
-            Self::Tooling => "General / tooling",
-        }
+// All user-facing type keys, labels, and headings originate here. The scan
+// cache stores evidence, not types, so older inventories remain readable.
+project_kinds! {
+    "Web" {
+        Frontend: "frontend" => "Frontend",
+        Backend: "backend" => "Backend",
+        FullStack: "full_stack" => "Full-stack",
+    }
+    "Mobile" {
+        Android: "android" => ANDROID,
+        Ios: "ios" => IOS,
+        AndroidAndIos: "dual" => "Android + iOS",
+        Mobile: "mobile" => "Cross-platform",
+    }
+    "Build system" {
+        GradleGroovy: "groovy" => "Gradle · Groovy DSL",
+        GradleKotlin: "kotlin" => "Gradle · Kotlin DSL",
+        GradleMixed: "gradle_mixed" => "Gradle · both DSLs",
+    }
+    "Other" {
+        Desktop: "desktop" => "Desktop app",
+        Library: "library" => "Library / SDK",
+        Cli: "cli" => "CLI tool",
+        Data: "data" => "Data / ML",
+        Infrastructure: "infrastructure" => "DevOps / Infra",
+        Tooling: "tooling" => "General / tooling",
     }
 }
 
@@ -162,10 +191,20 @@ impl Project {
             ProjectKind::Backend
         } else if self.roles.contains(&Role::Frontend) {
             ProjectKind::Frontend
-        } else if self.is_gradle() {
-            ProjectKind::Gradle
+        } else if self.roles.contains(&Role::Data) {
+            ProjectKind::Data
+        } else if self.roles.contains(&Role::Cli) {
+            ProjectKind::Cli
+        } else if self.roles.contains(&Role::Library) {
+            ProjectKind::Library
         } else {
-            ProjectKind::Tooling
+            match (self.is_gradle_groovy(), self.is_gradle_kotlin()) {
+                (true, true) => ProjectKind::GradleMixed,
+                (true, false) => ProjectKind::GradleGroovy,
+                (false, true) => ProjectKind::GradleKotlin,
+                _ if self.roles.contains(&Role::Infrastructure) => ProjectKind::Infrastructure,
+                _ => ProjectKind::Tooling,
+            }
         }
     }
 

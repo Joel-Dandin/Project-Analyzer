@@ -4,6 +4,7 @@ mod files;
 mod git;
 mod group;
 mod model;
+mod purpose;
 mod rules;
 
 use std::{

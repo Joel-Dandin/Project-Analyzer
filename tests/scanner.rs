@@ -57,14 +57,14 @@ fn detects_full_stack_conventions_and_standalone_apps() -> Result<()> {
     assert_eq!(report.projects.len(), 4);
     let commerce = &report.projects[0];
     assert_eq!(commerce.name(), "commerce");
-    assert_eq!(commerce.kind(), "Full stack");
+    assert_eq!(commerce.kind(), "Full-stack");
     assert!(commerce.stack.contains("React") && commerce.stack.contains("Spring Boot"));
     assert_eq!(commerce.components.len(), 2);
     let desktop = &report.projects[1];
-    assert_eq!(desktop.kind(), "Desktop");
+    assert_eq!(desktop.kind(), "Desktop app");
     assert!(desktop.stack.contains("Tauri"));
     let flask = &report.projects[2];
-    assert_eq!(flask.kind(), "Back end");
+    assert_eq!(flask.kind(), "Backend");
     assert!(flask.stack.contains("Flask"));
     assert_eq!(flask.components.len(), 2);
     assert!(report.projects[3].stack.contains("FastAPI"));
@@ -112,7 +112,7 @@ fn groups_workspace_globs_and_respects_nested_repository_boundaries() -> Result<
     )?;
     let report = report(root)?;
     assert_eq!(report.projects.len(), 3);
-    assert_eq!(report.projects[0].kind(), "Full stack");
+    assert_eq!(report.projects[0].kind(), "Full-stack");
     assert_eq!(report.projects[0].components.len(), 3);
     let nested = &report.projects[1];
     assert_eq!(nested.name(), "external");
@@ -159,7 +159,7 @@ fn ignores_generated_files_and_does_not_modify_the_workspace() -> Result<()> {
     assert_eq!(first.projects.len(), 1);
     assert_eq!(first.projects[0].path, dunce::canonicalize(root)?);
     assert_eq!(first.projects[0].components.len(), 1);
-    assert_eq!(first.projects[0].kind(), "Front end");
+    assert_eq!(first.projects[0].kind(), "Frontend");
     assert_eq!(before, files(root)?);
     Ok(())
 }
@@ -272,7 +272,7 @@ fn groups_conventional_layouts_using_source_under_component_manifests() -> Resul
         anyhow::bail!("expected one project")
     };
     assert_eq!(portal.name(), "portal");
-    assert_eq!(portal.kind(), "Full stack");
+    assert_eq!(portal.kind(), "Full-stack");
     assert!(portal.stack.contains("React") && portal.stack.contains("Flask"));
     assert_eq!(portal.components.len(), 4);
     Ok(())
@@ -302,8 +302,8 @@ fn keeps_independent_git_projects_out_of_conventional_layouts() -> Result<()> {
     };
     assert_eq!(backend.name(), "back-end");
     assert_eq!(frontend.name(), "front-end");
-    assert_eq!(backend.kind(), "Back end");
-    assert_eq!(frontend.kind(), "Front end");
+    assert_eq!(backend.kind(), "Backend");
+    assert_eq!(frontend.kind(), "Frontend");
     assert!(frontend.repository.is_none());
     Ok(())
 }
@@ -352,11 +352,11 @@ fn distinguishes_gradle_tooling_back_ends_and_android_projects() -> Result<()> {
     assert_eq!(result.projects.len(), 4);
     let find = |name: &str| result.projects.iter().find(|p| p.name() == name).unwrap();
     let tooling = find("gradle");
-    assert_eq!(tooling.kind(), "Gradle");
+    assert_eq!(tooling.kind(), "Gradle · both DSLs");
     assert!(tooling.is_gradle() && !tooling.is_mobile());
     assert!(!tooling.is_android());
     let spring = find("spring");
-    assert_eq!(spring.kind(), "Back end");
+    assert_eq!(spring.kind(), "Backend");
     assert!(spring.is_gradle() && !spring.is_mobile());
     let native = find("native");
     assert_eq!(native.kind(), "Android");
@@ -440,11 +440,11 @@ fn groups_flutter_platforms_and_keeps_expo_without_native_files_generic() -> Res
         anyhow::bail!("expected two projects, found {}", result.projects.len());
     };
     assert_eq!(travel.name(), "travel");
-    assert_eq!(travel.kind(), "Android & iOS");
+    assert_eq!(travel.kind(), "Android + iOS");
     assert!(travel.is_gradle() && travel.is_android() && travel.is_ios() && travel.is_mobile());
     assert_eq!(travel.components.len(), 4);
     assert_eq!(prototype.name(), "prototype");
-    assert_eq!(prototype.kind(), "Mobile");
+    assert_eq!(prototype.kind(), "Cross-platform");
     assert!(prototype.stack.contains("Expo"));
     assert!(!prototype.is_android() && !prototype.is_ios());
     Ok(())

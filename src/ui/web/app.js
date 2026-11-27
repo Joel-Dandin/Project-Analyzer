@@ -48,22 +48,21 @@ function renderSidebar() {
     <span class="ellipsis" title="${text(folder.path)}">${text(shortPath(folder.path, home, windows))}</span>
     <button class="x" data-action="remove-folder" data-value="${text(attrId(folder.id))}" aria-label="Remove ${text(folder.path)}"${disabled(busy || loading)}>×</button>
   </div>`).join(""));
-  const types = Object.entries(projectTypes);
-  setContent($("type-nav"), types.map(([key, label], index) => {
-    const count = projects.filter(project => matchesType(project, key)).length;
-    return index < 8 || count || key === kind ? nav(label, "kind", key, count, all && key === kind) : "";
-  }).join(""));
   const counts = new Map(metrics.project_types.map(({label, count}) => [label, count]));
+  setContent($("type-nav"), [...projectTypeGroups()].map(([group, types]) => `<section class="type-group" aria-label="${text(group)}">
+    <h3>${text(group)}</h3>${types.map(([key, label]) =>
+      nav(label, "kind", key, counts.get(label) ?? 0, all && key === kind)).join("")}
+  </section>`).join(""));
   $("total").textContent = projects.length;
-  setContent($("total-bar"), types.map(([, label], index) => counts.has(label)
-    ? `<i title="${text(label)}" style="flex:${counts.get(label)};background:rgba(255,255,255,${(0.26 - index * 0.01).toFixed(2)})"></i>` : "").join(""));
+  setContent($("total-bar"), [...projectTypes.values()].filter(({label}) => counts.has(label)).map(({label}, index) =>
+    `<i title="${text(label)}" style="flex:${counts.get(label)};background:rgba(255,255,255,${(0.45 - index * 0.02).toFixed(2)})"></i>`).join(""));
 }
 
 function renderHeader(count) {
   const {loading, progress, history, cached, folders, notice, storage_error} = workspace;
   const stats = page === "statistics";
   const ideas = page === "ideas";
-  $("page-heading").textContent = stats ? "Statistics" : ideas ? "Idea board" : starred ? "Starred" : "All projects";
+  $("page-heading").textContent = stats ? "Statistics" : ideas ? "Idea board" : starred ? "Starred" : kind ? (secondaryFilters[kind] ?? projectTypeLabel(kind)) : "All projects";
   $("page-count").textContent = count;
   $("header-action").textContent = stats ? "Export" : ideas ? "+ New idea" : "Rescan";
   $("header-action").classList.toggle("pri", ideas);
@@ -100,15 +99,22 @@ function remoteName(remote) {
 }
 
 function renderList(projects) {
-  const groups = new Map(Object.keys(projectTypes).map(key => [key, []]));
   const sorted = [...projects].sort(orderProjects);
-  for (const project of sorted) groups.get(project.kind).push(project);
+  const groups = new Map();
+  if (grouped) {
+    for (const project of sorted) {
+      const key = project.kind;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(project);
+    }
+  }
+  const groupOrder = [...projectTypes.keys(), ...[...groups.keys()].filter(key => !projectTypes.has(key))];
   const row = project => {
     const id = text(attrId(project.id));
     const remote = primaryRemote(project);
     const path = shortPath(project.path, workspace.home, workspace.windows);
     const meta = `${path}${remote ? ` · ${[remote.host, remote.account].filter(Boolean).join("/")}` : ""}`;
-    return `<div class="r${project.id === selected ? " sel" : ""}">
+    return `<div class="r${project.id === selected ? " sel" : ""}${project.statuses.includes("archived") ? " archived" : ""}">
       ${star(project)}${statusDot(project.statuses)}
       <button class="project-select" data-action="select" data-value="${id}" data-focus="select:${id}"${project.id === selected ? ' aria-current="true"' : ""}>
         <span class="n"><span class="ellipsis" title="${text(project.name)}">${text(project.name)}</span>${chips(project.stack.slice(0, 2))}</span>
@@ -120,7 +126,10 @@ function renderList(projects) {
   };
   const empty = workspace.loading ? "Loading workspace…" : !workspace.folders.length ? "Choose a folder and start a scan to find projects." : workspace.progress ? "Looking for projects…" : "No projects match this view.";
   setContent($("project-list"), !sorted.length ? `<div class="t3 empty">${empty}</div>` : grouped
-    ? [...groups].filter(([, items]) => items.length).map(([key, items]) => `<div class="grp"><b>${projectTypes[key]}</b><span class="t3">${items.length}</span></div>${items.map(row).join("")}`).join("")
+    ? groupOrder.filter(key => groups.has(key)).map(key => {
+      const items = groups.get(key);
+      return `<div class="grp"><b>${text(projectTypeLabel(key))}</b><span class="t3">${items.length}</span></div>${items.map(row).join("")}`;
+    }).join("")
     : sorted.map(row).join(""));
 }
 
@@ -141,7 +150,7 @@ function renderDetails(project) {
     for (const input of $("editor").querySelectorAll("form input")) input.value = "";
     editorId = project.id;
   }
-  setContent($("detail-heading"), `${star(project, true)}<h2 class="ellipsis spacer" title="${text(project.name)}">${text(project.name)}</h2><span class="ch">${projectTypes[project.kind]}</span>`);
+  setContent($("detail-heading"), `${star(project, true)}<h2 class="ellipsis spacer" title="${text(project.name)}">${text(project.name)}</h2><span class="ch">${text(projectTypeLabel(project.kind))}</span>`);
   $("detail-path").textContent = shortPath(project.path, workspace.home, workspace.windows);
   $("detail-path").title = project.path;
   setContent($("status-value"), `${statusDot(project.statuses)}<span>${text(statusSummary(project.statuses))}</span>`);
@@ -199,6 +208,7 @@ function render() {
 }
 
 window.receive = next => {
+  loadProjectTypes(next.project_types ?? []);
   workspace = {...next, projects: next.projects.map(project => ({...project,
     tags: project.tags ?? [], versions: project.versions ?? [], statuses: project.statuses ?? [],
     todos: project.todos ?? [], history: project.history ?? [],
@@ -247,11 +257,14 @@ function openMenu(name, button) {
   anchor.setAttribute("aria-expanded", "true");
   const project = workspace.projects.find(item => item.id === editorId);
   if (name === "filter") {
+    const typeGroups = [...projectTypeGroups(), ["Platform and DSL filters", Object.entries(secondaryFilters)]];
+    const options = typeGroups.map(([group, entries]) => `<optgroup label="${text(group)}">${entries.map(([key, label]) =>
+      `<option value="${key}">${text(label)}</option>`).join("")}</optgroup>`).join("");
     setContent(popup, `<label class="menu-label" for="project-search">Search projects</label>
       <input class="in" id="project-search" type="search" placeholder="Name, path, stack, tags…">
       <label class="menu-label" for="kind-filter">Type</label>
       <select class="in" id="kind-filter"><option value="">All project types</option>
-        ${Object.entries(filters).map(([key, label]) => `<option value="${key}">${text(label)}</option>`).join("")}</select>
+        ${options}</select>
       <button class="btn menu-footer" data-action="reset">Clear filters</button>`);
     $("project-search").value = query;
     $("kind-filter").value = kind;
@@ -291,7 +304,7 @@ document.addEventListener("click", event => {
       page = value === "statistics" || value === "ideas" ? value : "projects";
       if (page === "projects") { kind = ""; starred = value === "starred"; }
       break;
-    case "kind": page = "projects"; kind = kind === value ? "" : value; break;
+    case "kind": page = "projects"; starred = false; kind = kind === value ? "" : value; break;
     case "starred": starred = !starred; break;
     case "reset": kind = query = ""; starred = false; $("version-search").value = ""; closeMenu(true); break;
     case "select": selected = decodeURIComponent(value); showDetails = true; break;

@@ -13,7 +13,7 @@ function summarizeWorkspace({projects, folders, history, last_report}) {
   let starred = 0, active = 0, labelled = 0, git = 0, remotes = 0, total = 0, done = 0, mostOpen = null;
   const changes = [];
   for (const project of projects) {
-    increment(counts.project_types, projectTypes[project.kind]);
+    increment(counts.project_types, projectTypeLabel(project.kind));
     increment(counts.statuses, statusLabel(primaryStatus(project.statuses)));
     for (const item of new Set(project.stack)) increment(languageNames.has(item) ? counts.languages : counts.frameworks, item);
     for (const tag of new Set(project.tags)) increment(counts.tags, tag);
