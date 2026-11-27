@@ -1,4 +1,5 @@
 mod board;
+mod launch;
 mod workspace;
 
 use std::{borrow::Cow, collections::BTreeSet, path::PathBuf, sync::Arc, thread, time::Instant};
@@ -37,6 +38,10 @@ enum Command {
         report: String,
     },
     RetrySave,
+    Open {
+        id: String,
+        target: launch::Action,
+    },
     Board {
         request: board::Request,
     },
@@ -67,6 +72,7 @@ enum Message {
     Progress(usize),
     Scanned(Result<Option<ScanReport>>),
     Saved(Result<()>),
+    Opened(Result<()>),
 }
 
 #[derive(Default)]
@@ -262,6 +268,16 @@ impl Dashboard {
                 Command::Cancel => self.cancel(),
                 Command::Export { report } => self.export(window, report),
                 Command::RetrySave => self.save(proxy),
+                Command::Open { id, target } => match target.resolve(&self.library, &id) {
+                    Ok(target) => {
+                        self.notice = None;
+                        let proxy = proxy.clone();
+                        thread::spawn(move || {
+                            let _ = proxy.send_event(Message::Opened(target.open()));
+                        });
+                    }
+                    Err(error) => self.notice = Some(error.to_string()),
+                },
                 Command::Edit { id, edit } => self.edit(&id, edit, proxy),
                 _ => {}
             },
@@ -297,6 +313,11 @@ impl Dashboard {
                     _ => self.notice = Some("Scan cancelled".into()),
                 }
                 self.save(proxy);
+            }
+            Message::Opened(result) => {
+                if let Err(error) = result {
+                    self.notice = Some(format!("{error:#}"));
+                }
             }
             Message::Saved(result) => {
                 self.saving = false;
@@ -505,6 +526,13 @@ mod tests {
         assert!(
             matches!(serde_json::from_str(board), Ok(Command::Board { request }) if request.token == 7)
         );
+        assert!(matches!(
+            serde_json::from_str(r#"{"action":"open","id":"project","target":"repository"}"#),
+            Ok(Command::Open {
+                target: launch::Action::Repository,
+                ..
+            })
+        ));
         assert!(dashboard_url(URL));
         assert_eq!(
             asset(&Request::get("/dashboard.json").body(vec![]).unwrap()).status(),

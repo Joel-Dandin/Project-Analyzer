@@ -148,7 +148,7 @@ function renderDetails(project) {
   const remote = primaryRemote(project);
   setContent($("repo-property"), `<span>Git</span>${lockIcon}<span class="t2 git-value ellipsis" title="${text(remote ? remoteName(remote) : "")}">
     ${remote ? `<b>${text(remote.host)}</b>${[remote.account, remote.repository].filter(Boolean).map(part => ` / ${text(part)}`).join("")}` : project.repository ? "Local repository (no remote)" : "No repository"}
-  </span><span class="t3 read-only">read-only</span>`);
+  </span><button class="btn compact open-project" type="button" data-action="open-repository" data-focus="open-repository"${disabled(!remote)} title="${remote ? "Open the repository in the default browser" : "No remote repository detected"}">Open in browser</button>`);
   setContent($("stack"), chips(project.stack));
   setContent($("tags"), labelChips(project, "tag", project.tags));
   setContent($("versions"), labelChips(project, "version", project.versions));
@@ -295,6 +295,9 @@ document.addEventListener("click", event => {
     case "starred": starred = !starred; break;
     case "reset": kind = query = ""; starred = false; $("version-search").value = ""; closeMenu(true); break;
     case "select": selected = decodeURIComponent(value); showDetails = true; break;
+    case "open-folder": case "open-repository":
+      if (editorId != null) post("open", {id: editorId, target: action === "open-folder" ? "folder" : "repository"});
+      return;
     case "star": {
       const id = decodeURIComponent(value);
       const project = workspace.projects.find(item => item.id === id);

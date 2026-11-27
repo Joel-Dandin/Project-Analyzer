@@ -69,7 +69,9 @@ button:not(:disabled):hover:is(.nav, .btn:not(.pri), .ib) { background: var(--ho
 .details .empty { padding: 0; }
 .detail-heading { gap: 10px; }
 .detail-heading h2 { font-size: 17px; }
-.detail-path { margin: 4px 0 0 23px; overflow-wrap: anywhere; }
+.detail-location { margin: 4px 0 0 23px; }
+.detail-path { min-width: 0; overflow-wrap: anywhere; }
+.open-project { flex: none; white-space: nowrap; }
 .lb { display: block; }
 .lb.row { display: flex; }
 .status-value { flex: 1; min-width: 0; }
