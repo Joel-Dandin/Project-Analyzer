@@ -166,6 +166,12 @@ fn classifies_explicit_purposes_without_mistaking_helpers_for_primary_apps() -> 
     )?;
     put(&root.join("not-chart/Chart.yaml"), "name: not-a-chart\n")?;
     put(&root.join("build-helper/Dockerfile"), "FROM scratch\n")?;
+    for cache in [".terraform/modules", ".terragrunt-cache"] {
+        put(
+            &root.join(cache).join("downloaded/main.tf"),
+            "terraform {\n}\n",
+        )?;
+    }
 
     let report = scan(root, &ScanControl::default())?.context("scan cancelled")?;
     assert_eq!(report.projects.len(), fixtures.len(), "{report:#?}");

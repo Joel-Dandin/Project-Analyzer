@@ -302,6 +302,8 @@ fn prune_dir(name: &str) -> bool {
         ".turbo",
         ".cache",
         ".gradle",
+        ".terraform",
+        ".terragrunt-cache",
         ".dart_tool",
         ".build",
         ".idea",
