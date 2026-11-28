@@ -12,6 +12,7 @@ use toml::Value as Toml;
 use super::{
     files::read_small_text,
     model::{ANDROID, Component, GRADLE, GRADLE_KOTLIN, IOS, Role},
+    purpose,
 };
 
 const MANIFEST_LIMIT: u64 = 256 * 1024;
@@ -89,6 +90,8 @@ pub(super) enum Rule {
     Php,
     Swift,
     Elixir,
+    Terraform,
+    Helm,
 }
 
 impl Rule {
@@ -129,6 +132,8 @@ impl Rule {
             "composer.json" => Self::Php,
             "Package.swift" => Self::Swift,
             "mix.exs" => Self::Elixir,
+            "Chart.yaml" => Self::Helm,
+            _ if name.ends_with(".tf") || name.ends_with(".tf.json") => Self::Terraform,
             _ if name.ends_with(".csproj") || name.ends_with(".fsproj") => Self::Dotnet,
             _ => return None,
         })
@@ -204,7 +209,7 @@ pub(super) fn inspect(files: &[Candidate], cancelled: &AtomicBool) -> (Evidence,
             MANIFEST_LIMIT
         };
         match read_small_text(path, limit) {
-            Ok(text) => apply(*rule, name, &text, &mut evidence),
+            Ok(text) => apply(*rule, path, name, &text, &mut evidence),
             Err(_) => failures += 1,
         }
     }
@@ -224,13 +229,14 @@ fn standalone_html(path: &Path) -> bool {
         })
 }
 
-fn apply(rule: Rule, name: &str, text: &str, evidence: &mut Evidence) {
+fn apply(rule: Rule, path: &Path, name: &str, text: &str, evidence: &mut Evidence) {
     match rule {
         Rule::Node => {
             if let Ok(data) = serde_json::from_str::<Json>(text)
                 && let Some(object) = data.as_object()
             {
                 evidence.declare(name, "Node.js");
+                evidence.roles.extend(purpose::node(&data));
                 for key in [
                     "dependencies",
                     "devDependencies",
@@ -304,6 +310,7 @@ fn apply(rule: Rule, name: &str, text: &str, evidence: &mut Evidence) {
                 && (data.get("package").is_some() || data.get("workspace").is_some())
             {
                 evidence.declare(name, "Rust");
+                evidence.roles.extend(purpose::cargo(&data, path));
                 if let Some(workspace) = data.get("workspace") {
                     toml_patterns(workspace.get("members"), &mut evidence.includes);
                     toml_patterns(workspace.get("exclude"), &mut evidence.excludes);
@@ -326,6 +333,7 @@ fn apply(rule: Rule, name: &str, text: &str, evidence: &mut Evidence) {
                     || matches!(rule, Rule::Pipfile))
             {
                 evidence.declare(name, "Python");
+                evidence.roles.extend(purpose::python(&data));
                 if let Some(project) = data.get("project") {
                     python_array(project.get("dependencies"), evidence);
                     if let Some(groups) = project
@@ -377,6 +385,11 @@ fn apply(rule: Rule, name: &str, text: &str, evidence: &mut Evidence) {
                     "tkinter",
                     "PySide6",
                     "PyQt6",
+                    "torch",
+                    "tensorflow",
+                    "jax",
+                    "transformers",
+                    "pyspark",
                 ] {
                     if python_import(line, package) {
                         python_dependency(package, evidence);
@@ -614,6 +627,18 @@ fn apply(rule: Rule, name: &str, text: &str, evidence: &mut Evidence) {
                 evidence.role(Role::Backend, "Phoenix");
             }
         }
+        Rule::Terraform => {
+            if purpose::terraform(name, text) {
+                evidence.declare(name, "Terraform");
+                evidence.roles.insert(Role::Infrastructure);
+            }
+        }
+        Rule::Helm => {
+            if purpose::helm(text) {
+                evidence.declare(name, "Helm");
+                evidence.roles.insert(Role::Infrastructure);
+            }
+        }
         Rule::Angular | Rule::Next | Rule::Svelte | Rule::Nuxt | Rule::Tauri | Rule::Html => {}
     }
 }
@@ -706,6 +731,7 @@ fn rust_dependencies(manifest: &Toml, evidence: &mut Evidence) {
                 match value.get("package").and_then(Toml::as_str).unwrap_or(key) {
                     "tauri" | "tauri-build" => evidence.role(Role::Desktop, "Tauri"),
                     "gpui" => evidence.role(Role::Desktop, "GPUI"),
+                    "wry" => evidence.role(Role::Desktop, "Wry"),
                     "eframe" | "egui" => evidence.role(Role::Desktop, "egui"),
                     "iced" => evidence.role(Role::Desktop, "Iced"),
                     "axum" => evidence.role(Role::Backend, "Axum"),
@@ -732,6 +758,13 @@ fn python_dependency(spec: &str, evidence: &mut Evidence) {
         "aiohttp" => (Role::Backend, "aiohttp"),
         "streamlit" => (Role::Frontend, "Streamlit"),
         "gradio" => (Role::Frontend, "Gradio"),
+        "torch" | "pytorch" => (Role::Data, "PyTorch"),
+        "tensorflow" => (Role::Data, "TensorFlow"),
+        "jax" => (Role::Data, "JAX"),
+        "scikit-learn" | "scikit_learn" => (Role::Data, "scikit-learn"),
+        "transformers" => (Role::Data, "Transformers"),
+        "pyspark" => (Role::Data, "PySpark"),
+        "jupyter" | "jupyterlab" => (Role::Data, "Jupyter"),
         "tkinter" => (Role::Desktop, "Tkinter"),
         "pyside6" | "pyqt6" => (Role::Desktop, "Qt for Python"),
         _ => return,

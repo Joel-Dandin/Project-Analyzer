@@ -4,6 +4,7 @@ mod files;
 mod git;
 mod group;
 mod model;
+mod purpose;
 mod rules;
 
 use std::{
@@ -301,6 +302,8 @@ fn prune_dir(name: &str) -> bool {
         ".turbo",
         ".cache",
         ".gradle",
+        ".terraform",
+        ".terragrunt-cache",
         ".dart_tool",
         ".build",
         ".idea",

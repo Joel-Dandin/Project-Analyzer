@@ -1,3 +1,5 @@
+mod board;
+mod launch;
 mod workspace;
 
 use std::{borrow::Cow, collections::BTreeSet, path::PathBuf, sync::Arc, thread, time::Instant};
@@ -36,6 +38,13 @@ enum Command {
         report: String,
     },
     RetrySave,
+    Open {
+        id: String,
+        target: launch::Action,
+    },
+    Board {
+        request: board::Request,
+    },
     Edit {
         id: String,
         #[serde(flatten)]
@@ -63,6 +72,7 @@ enum Message {
     Progress(usize),
     Scanned(Result<Option<ScanReport>>),
     Saved(Result<()>),
+    Opened(Result<()>),
 }
 
 #[derive(Default)]
@@ -164,16 +174,8 @@ impl Dashboard {
         if self.store.is_none() {
             return;
         }
-        let Some(path) = self.library.snapshot().and_then(|report| {
-            report
-                .projects
-                .iter()
-                .find(|project| {
-                    path_key(&project.path) == id
-                        && workspace::contains(self.library.folders(), &project.path)
-                })
-                .map(|project| project.path.clone())
-        }) else {
+        let Some(path) = workspace::project(&self.library, id, |project| project.path.clone())
+        else {
             return;
         };
         let library = &mut self.library;
@@ -266,6 +268,16 @@ impl Dashboard {
                 Command::Cancel => self.cancel(),
                 Command::Export { report } => self.export(window, report),
                 Command::RetrySave => self.save(proxy),
+                Command::Open { id, target } => match target.resolve(&self.library, &id) {
+                    Ok(target) => {
+                        self.notice = None;
+                        let proxy = proxy.clone();
+                        thread::spawn(move || {
+                            let _ = proxy.send_event(Message::Opened(target.open()));
+                        });
+                    }
+                    Err(error) => self.notice = Some(error.to_string()),
+                },
                 Command::Edit { id, edit } => self.edit(&id, edit, proxy),
                 _ => {}
             },
@@ -302,6 +314,11 @@ impl Dashboard {
                 }
                 self.save(proxy);
             }
+            Message::Opened(result) => {
+                if let Err(error) = result {
+                    self.notice = Some(format!("{error:#}"));
+                }
+            }
             Message::Saved(result) => {
                 self.saving = false;
                 match result {
@@ -322,7 +339,7 @@ impl Dashboard {
     }
 
     fn publish(&self, view: &WebView) -> Result<()> {
-        let state = workspace::state(
+        let mut state = workspace::state(
             &self.library,
             self.store.as_ref(),
             self.loading,
@@ -332,13 +349,18 @@ impl Dashboard {
             self.notice.as_deref(),
             self.storage_error.as_deref(),
         );
-        let state = serde_json::to_string(&state)?;
-        view.evaluate_script(&format!(
-            "window.receive(JSON.parse({}))",
-            serde_json::to_string(&state)?
-        ))?;
-        Ok(())
+        state["saving"] = self.saving.into();
+        send_json(view, "receive", &state)
     }
+}
+
+fn send_json(view: &WebView, receiver: &str, value: &impl serde::Serialize) -> Result<()> {
+    let json = serde_json::to_string(value)?;
+    view.evaluate_script(&format!(
+        "window.{receiver}(JSON.parse({}))",
+        serde_json::to_string(&json)?
+    ))?;
+    Ok(())
 }
 
 fn asset(request: &Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
@@ -363,6 +385,16 @@ fn asset(request: &Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
                 200,
                 "text/javascript; charset=utf-8",
                 include_bytes!("web/catalog.js"),
+            ),
+            ("GET", "/ideas.js") => (
+                200,
+                "text/javascript; charset=utf-8",
+                include_bytes!("web/ideas.js"),
+            ),
+            ("GET", "/ideas.css") => (
+                200,
+                "text/css; charset=utf-8",
+                include_bytes!("web/ideas.css"),
             ),
             ("GET", "/app.js") => (
                 200,
@@ -448,6 +480,20 @@ pub fn run() -> Result<()> {
                     *flow = ControlFlow::Exit;
                 }
             }
+            Event::UserEvent(Message::Command(Command::Board { request })) => {
+                if app.ready && !app.loading && !app.closing {
+                    let (reply, changed) = request.apply(&mut app.library, app.store.is_some());
+                    let result = if changed {
+                        app.save(&proxy);
+                        app.publish(&view)
+                    } else {
+                        Ok(())
+                    };
+                    if let Err(error) = result.and(send_json(&view, "receiveBoard", &reply)) {
+                        eprintln!("Could not update idea board: {error:#}");
+                    }
+                }
+            }
             Event::UserEvent(message) => {
                 app.update(message, &window, &proxy, started);
                 if app.closing && !app.saving {
@@ -472,6 +518,18 @@ mod tests {
             serde_json::from_str(cmd),
             Ok(Command::Edit {
                 edit: Edit::Status { .. },
+                ..
+            })
+        ));
+        let board =
+            r##"{"action":"board","request":{"token":7,"op":"preview","markdown":"# Idea"}}"##;
+        assert!(
+            matches!(serde_json::from_str(board), Ok(Command::Board { request }) if request.token == 7)
+        );
+        assert!(matches!(
+            serde_json::from_str(r#"{"action":"open","id":"project","target":"repository"}"#),
+            Ok(Command::Open {
+                target: launch::Action::Repository,
                 ..
             })
         ));

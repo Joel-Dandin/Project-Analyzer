@@ -1,16 +1,29 @@
 "use strict";
 
-// Keys match the dashboard data sent by Rust. Filter membership can overlap, but
-// a project appears in exactly one group in the inventory and statistics.
-const projectTypes = Object.freeze({
-  frontend: "Frontend", backend: "Backend", full_stack: "Full-stack",
-  android: "Android only", ios: "iOS only", dual: "Android + iOS",
-  groovy: "Gradle (Groovy DSL)", kotlin: "Gradle (Kotlin DSL)",
-  gradle_mixed: "Gradle (both DSLs)", desktop: "Desktop", mobile: "Other mobile", tooling: "General / tooling",
+// Rust supplies the ordered primary taxonomy; these secondary filters may overlap.
+const projectTypes = new Map();
+const secondaryFilters = Object.freeze({
+  android_any: "Android (any)", ios_any: "iOS (any)", gradle: "Non-mobile Gradle (any DSL)",
+  groovy_any: "Non-mobile Gradle with Groovy DSL", kotlin_any: "Non-mobile Gradle with Kotlin DSL",
 });
-const filters = Object.freeze({
-  ...projectTypes, android_any: "Android (any)", ios_any: "iOS (any)", gradle: "Non-mobile Gradle (any DSL)",
-});
+
+function loadProjectTypes(types) {
+  projectTypes.clear();
+  for (const entry of types) projectTypes.set(entry.key, entry);
+}
+
+function projectTypeLabel(key) {
+  return projectTypes.get(key)?.label ?? "Unclassified";
+}
+
+function projectTypeGroups() {
+  const groups = new Map();
+  for (const [key, {group, label}] of projectTypes) {
+    if (!groups.has(group)) groups.set(group, []);
+    groups.get(group).push([key, label]);
+  }
+  return groups;
+}
 const statuses = Object.freeze({
   planned: ["Planning", "#8A8F98"], in_progress: ["Active", "#4CB782"],
   developing: ["Developing", "#4CB782"], in_review: ["In review", "#F2C94C"],
@@ -30,11 +43,11 @@ function text(value) {
 function matchesType(project, type) {
   switch (type) {
     case "": return true;
-    case "android_any": return project.kind === "android" || project.kind === "dual";
-    case "ios_any": return project.kind === "ios" || project.kind === "dual";
+    case "android_any": return project.android;
+    case "ios_any": return project.ios;
     case "gradle": return project.groovy || project.kotlin;
-    case "groovy": return project.groovy;
-    case "kotlin": return project.kotlin;
+    case "groovy_any": return project.groovy;
+    case "kotlin_any": return project.kotlin;
     default: return project.kind === type;
   }
 }
@@ -58,7 +71,7 @@ function primaryStatus(values) {
 
 function statusDot(values, inline = false) {
   const status = primaryStatus(values);
-  return `<i class="dot${inline ? " inline-dot" : ""}" style="background:${statuses[status]?.[1] ?? "#6B6F76"}" title="${text(statusSummary(values))}" aria-hidden="true"></i>`;
+  return `<i class="dot${inline ? " inline-dot" : ""}${status === "archived" ? " archived-dot" : ""}" style="--status-color:${statuses[status]?.[1] ?? "#6B6F76"}" title="${text(statusSummary(values))}" aria-hidden="true"></i>`;
 }
 
 function matchesProject(project, {kind, starred, version, query}) {
@@ -69,7 +82,7 @@ function matchesProject(project, {kind, starred, version, query}) {
     remote.name, remote.host, remote.account, remote.repository,
     ...((remote.push_targets ?? []).flatMap(target => [target.host, target.account, target.repository])),
   ]);
-  const haystack = [project.name, project.path, projectTypes[project.kind], ...project.stack, ...remotes,
+  const haystack = [project.name, project.path, projectTypeLabel(project.kind), ...project.stack, ...remotes,
     project.summary, project.notes, ...project.tags, ...project.versions,
     ...project.statuses.flatMap(value => [statusLabel(value), value.replaceAll("_", " ")]),
   ].join("\n").toLowerCase();
